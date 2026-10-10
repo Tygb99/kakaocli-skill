@@ -1,6 +1,6 @@
 ---
 name: kakaocli-auth
-description: "macOS kakaocli로 카카오톡 로컬 DB를 열어 대화를 검색·조회할 때 쓰는 인증과 조회 절차. '카톡 검색해줘', '톡방에서 찾아봐', '오픈채팅에서 ~ 관련 내용 찾아줘', '카카오톡 대화 읽어줘', '누가 그 말 했어?', '보낸 사람 이름도 보여줘', 'kakaocli 인증이 안 돼', 'auth 실패', 'User ID auto-detection failed', 'PRAGMA key failed', 'harvest 어떻게 써?' 같은 상황이면 이 스킬을 쓸 것. user ID 자동탐지는 사실상 항상 실패하므로 브루트포스로 뚫고 키를 직접 유도해야 하며, 발신자 이름은 harvest가 아니라 NTUser 조인으로 붙인다 — 이 두 가지를 모르면 시작조차 못 하거나 전부 Unknown으로만 보인다. 조회가 느릴 때('카톡 조회가 느려', 'query가 오래 걸려')는 열쇠·DB 경로를 env에 두고 --db를 넘기는 절차를, '카톡 보내줘', '열린 채팅 창에 글 넣어줘'처럼 이미 열린 채팅 창으로 보낼 때는 kakao-send.py(dry-run·DB 확인)를, 오픈채팅 답장이 어느 글에 달린 말인지 판정할 때는 threadId(scope 3)를 다룬다. 채팅 창 열기 같은 일반 UI 자동화는 다루지 않는다."
+description: "macOS kakaocli로 카카오톡 로컬 DB를 열어 대화를 검색·조회할 때 쓰는 인증과 조회 절차. '카톡 검색해줘', '톡방에서 찾아봐', '오픈채팅에서 ~ 관련 내용 찾아줘', '카카오톡 대화 읽어줘', '누가 그 말 했어?', '보낸 사람 이름도 보여줘', 'kakaocli 인증이 안 돼', 'auth 실패', 'User ID auto-detection failed', 'PRAGMA key failed' 같은 상황이면 이 스킬을 쓸 것. user ID 자동탐지는 사실상 항상 실패하므로 브루트포스로 뚫고 키를 직접 유도해야 하며, 발신자 이름은 NTUser 조인으로 붙인다 — 이 두 가지를 모르면 시작조차 못 하거나 전부 Unknown으로만 보인다. 조회가 느릴 때('카톡 조회가 느려', 'query가 오래 걸려')는 열쇠·DB 경로를 env에 두고 --db를 넘기는 절차를, '카톡 보내줘', '열린 채팅 창에 글 넣어줘'처럼 이미 열린 채팅 창으로 보낼 때는 kakao-send.py(dry-run·DB 확인)를, 오픈채팅 답장이 어느 글에 달린 말인지 판정할 때는 threadId(scope 3)를 다룬다. 채팅 창 열기 같은 일반 UI 자동화는 다루지 않는다."
 ---
 
 # kakaocli 인증
@@ -22,7 +22,7 @@ sqlcipher를 함께 깔고 소스에서 빌드한다.
 **시스템 설정 > 개인정보 보호 및 보안**에서 터미널 앱에 권한을 준다:
 
 - **전체 디스크 접근** — 모든 명령에 필요
-- **손쉬운 사용** — `send`, `harvest`, `inspect`에만 필요
+- **손쉬운 사용** — `send`, `inspect`, 보내기 스크립트(§8)에만 필요
 
 권한 부여는 사용자가 직접 해야 한다. 에이전트가 대신 켤 수 없다.
 
@@ -40,7 +40,7 @@ No candidate user ID produced a valid key.
 
 업스트림 이슈: [#14](https://github.com/silver-flight-group/kakaocli/issues/14) (증상 전반), [#4](https://github.com/silver-flight-group/kakaocli/issues/4) (브루트포스 타임아웃이 짧다 — 근본 원인), [#16](https://github.com/silver-flight-group/kakaocli/issues/16) (20억까지 뒤져도 못 찾은 사례, closed)
 
-`status`가 `App installed: No`라고 해도 무시한다. 한국어 환경은 앱 이름이 `/Applications/카카오톡.app`인데 코드가 `KakaoTalk.app` 경로를 하드코딩해서 그렇다. 나머지는 전부 번들 ID(`com.kakao.KakaoTalkMac`)로 찾으므로 조회에는 영향이 없다. 영향받는 건 이 표시 한 줄과, 카카오톡이 꺼져 있을 때 `send`/`harvest`가 자동 실행해주는 `launch()`뿐이다. 올려둔 이슈: [#22](https://github.com/silver-flight-group/kakaocli/issues/22)
+`status`가 `App installed: No`라고 해도 무시한다. 한국어 환경은 앱 이름이 `/Applications/카카오톡.app`인데 코드가 `KakaoTalk.app` 경로를 하드코딩해서 그렇다. 나머지는 전부 번들 ID(`com.kakao.KakaoTalkMac`)로 찾으므로 조회에는 영향이 없다. 영향받는 건 이 표시 한 줄과, 카카오톡이 꺼져 있을 때 `send`가 자동 실행해주는 `launch()`뿐이다. 올려둔 이슈: [#22](https://github.com/silver-flight-group/kakaocli/issues/22)
 
 **앱 이름을 바꾸지 말 것.** 앱 업데이트가 원래 이름으로 재설치해 두 벌이 남는다. 자동 실행이 꼭 필요하면 심볼릭 링크로 우회한다: `sudo ln -s /Applications/카카오톡.app /Applications/KakaoTalk.app`
 
@@ -113,7 +113,7 @@ kst = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=9)
 
 텍스트 출력(`--json` 없이)은 로컬 시각으로 보여주므로 둘을 섞어 쓰면 헷갈린다. **하나로 통일한다.**
 
-### 보낸 사람 이름은 SQL로 붙인다 — `harvest` 필요 없다
+### 보낸 사람 이름은 SQL로 붙인다
 
 `messages` / `search`가 발신자를 `Unknown`으로 보여주는 건 조인을 안 해서일 뿐, **이름은 이미 DB에 있다.** `NTUser`에 오픈채팅 참여자까지 들어 있고 `NTChatMessage.authorId`로 그대로 걸린다.
 
@@ -136,15 +136,9 @@ ORDER BY m.sentAt
 
 주요 테이블: `NTChatMessage`(chatId, logId, authorId, message, sentAt, attachment…), `NTUser`, `NTChatRoom`, `NTOpenLink`.
 
-### 방 이름은 여전히 `(unknown)`이다
+### 방 이름
 
-방 이름은 DB에 없어서 `harvest`가 UI를 긁어야 채워진다(`~/.kakaocli/metadata.json`). **대부분의 경우 필요 없다** — `search`는 방 이름 없이 전 대화를 뒤지고, 방을 특정할 땐 `chat_id`를 쓰면 된다.
-
-`harvest`를 쓸 거라면 알아둘 것:
-
-- **읽지 않은 방은 건너뛴다.** `skipUnread` 기본값이 `true`이고 CLI로 끌 수 없다. 방을 열면 읽음 처리되니 일부러 피하는 것이다. 미읽음이 쌓인 방(활발한 오픈채팅이 대부분 그렇다)은 이름이 안 붙는다. 붙이려면 카카오톡에서 그 방을 먼저 읽어야 한다 — 되돌릴 수 없으니 사용자 판단이다.
-- 손쉬운 사용 권한이 필요하고 카카오톡 창을 자동 조작한다. `--dry-run`으로 대상을 먼저 확인하고 `--top N`으로 범위를 좁힌다.
-- `--scroll`은 각 방을 열고 위로 스크롤하며 '이전 대화 보기'를 반복 클릭한다. 서버에서 과거 대화를 더 끌어와야 할 때만 쓴다. 오래 걸리고 화면이 계속 움직인다.
+`chats`가 방 이름을 `(unknown)`으로 보여줘도 DB로 충분하다. 오픈채팅 방 이름은 `NTOpenLink.linkName`에 있다(§6 「방 목록을 다시 뽑을 때」 SQL). 방을 특정할 땐 이름 대신 `chat_id`를 쓰고, `search`는 방 이름 없이 전 대화를 뒤진다.
 
 ### 조인은 메시지를 복제한다 — `logId`로 묶어라
 
@@ -245,7 +239,7 @@ env 파일      : <§7의 secrets.env 경로>
 
 user ID는 계정이 바뀌지 않는 한 그대로다. 카카오톡을 재설치하거나 기기를 옮기면 UUID가 바뀌므로 키를 다시 유도한다.
 
-방 목록을 다시 뽑을 때(이름은 `NTOpenLink`에 있으므로 `harvest` 불필요):
+방 목록을 다시 뽑을 때(이름은 `NTOpenLink`에 있다):
 
 ```sql
 SELECT o.linkId, o.linkName,
@@ -341,7 +335,7 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file
 - [ ] 키를 화면에 찍지 않았는가 — `--key`를 안 받는 스크립트(`extract-photos.py`)에 넘겨 usage 에러로 새지 않았는가. 샜다면 세션 .jsonl 치환까지 했는가(§4)
 - [ ] 타임스탬프를 KST로 변환했는가 (`--json`은 UTC, `query`는 `'+9 hours'`)
 - [ ] `text`가 `null`인 행을 방어했는가
-- [ ] 발신자 이름이 필요하면 `harvest` 대신 `NTUser` 조인을 썼는가
+- [ ] 발신자 이름이 필요하면 `NTUser` 조인을 썼는가
 - [ ] **`GROUP BY m.logId`로 묶었는가** (안 묶으면 건수가 몇 배로 부풀려진다)
 - [ ] 반복 조회라면 `KAKAO_DB_KEY`·`KAKAO_DB_PATH`를 env 파일(권한 600)에 두고 `--db`를 넘겼는가, 파일 내용을 화면에 찍지 않았는가(§7)
 - [ ] 오픈채팅에서 누가 누구에게 답했는지 판정할 때 순서가 아니라 `scope=3`·`threadId`를 봤는가(§5)
