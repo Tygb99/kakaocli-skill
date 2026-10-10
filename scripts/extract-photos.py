@@ -11,6 +11,8 @@
 주의: HEAD 요청은 이 CDN에서 거짓 404를 준다. 반드시 GET(=curl 기본)으로 받는다.
 시각: sentAt은 unix epoch(UTC 아님, 로컬 카톡 저장값) — SQL에서 '+9 hours'로 KST 변환.
 """
+from __future__ import annotations
+
 import argparse, csv, json, re, subprocess, sys, urllib.parse
 from pathlib import Path
 

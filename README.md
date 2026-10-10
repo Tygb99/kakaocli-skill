@@ -13,10 +13,16 @@ macOS 카카오톡 데스크톱의 로컬 DB를 [kakaocli](https://github.com/si
 
 ## 설치
 
+필요한 것: macOS, 카카오톡 데스크톱(로그인 상태), [kakaocli](https://github.com/silver-flight-group/kakaocli)(`brew install silver-flight-group/tap/kakaocli`), python3 3.9 이상(macOS 기본 `/usr/bin/python3`도 된다). 권한은 SKILL.md §1.
+
 ```bash
-git clone <이 저장소> ~/skills/kakaocli-auth
-ln -s ~/skills/kakaocli-auth ~/.claude/skills/kakaocli-auth     # 쓰는 에이전트의 스킬 폴더에 맞춘다
+git clone https://github.com/Tygb99/kakaocli-skill.git ~/skills/kakaocli-auth
+ln -s ~/skills/kakaocli-auth ~/.claude/skills/kakaocli-auth     # Claude Code. 다른 에이전트는 그 에이전트의 스킬 폴더(예: ~/.agents/skills/)
 ```
+
+- 에이전트를 새로 시작해야 스킬 목록에 나타난다. 「카톡 검색해줘」처럼 말했을 때 `kakaocli-auth`를 읽으면 설치된 것이다.
+- SKILL.md의 `scripts/...` 명령은 이 폴더(`~/skills/kakaocli-auth`)에서 실행한다.
+- 지우기: 심볼릭 링크와 클론 폴더를 지우고, §7에서 만든 env 파일(열쇠가 들어 있다)도 지운다.
 
 ## scripts/
 
@@ -28,5 +34,11 @@ ln -s ~/skills/kakaocli-auth ~/.claude/skills/kakaocli-auth     # 쓰는 에이�
 | `kakao_db.py` | env의 열쇠·DB 경로로 빠른 질의 (모듈·명령 겸용) |
 | `kakao-send.py` + `kakao-send-ui.js` | 열린 채팅 창으로 보내고 DB로 확인 |
 | `extract-photos.py` | 사진 메시지의 원본 URL로 받아 방·발신자·시각 붙이기 |
+
+## 출처
+
+- `derive-key.py`는 kakaocli의 `Sources/KakaoCore/Database/KeyDerivation.swift`를 파이썬으로 옮긴 것이다(MIT, Copyright (c) 2026 Silver Flight Group, LLC). 원 구현은 [blluv의 gist](https://gist.github.com/blluv/8418e3ef4f4aa86004657ea524f2de14)를 기반으로 한다.
+- `recover-uid.py`는 kakaocli `DeviceInfo.swift`의 user ID 복구 방식(Strategy 3)을 멀티코어로 다시 짠 것이다.
+- kakaocli 라이선스 전문은 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 이 기기에서만 쓰는 값(user ID, 방 목록 등)은 `LOCAL.md`에 둔다. `.gitignore`로 저장소에서 빠진다. 열쇠는 env 파일(권한 600)에만 두고 저장소에 넣지 않는다.
