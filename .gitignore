@@ -1,0 +1,7 @@
+# 이 기기에서만 쓰는 값(계정 ID·방 목록·운영 메모). 저장소에 올리지 않는다.
+LOCAL.md
+*.env
+__pycache__/
+*.pyc
+.DS_Store
+kakao_photos/
