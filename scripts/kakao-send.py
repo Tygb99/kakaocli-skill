@@ -2,7 +2,8 @@
 """이미 열린 카카오톡 채팅 창에 글·사진·파일을 보내고, kakaocli DB에서 내 메시지로 전송을 확인한다.
 
 사용: kakao-send.py --window <창 제목> --chat-id <CHAT_ID> [--file <글.txt>] [--photo <사진>]... [--attach <파일>]...
-                    [--me <내 USER_ID>] [--dry-run]
+                    [--me <내 USER_ID>] (--send | --dry-run)
+  --send    : 실제로 보낸다. --send도 --dry-run도 없으면 미리보기만 한다(보낼 곳·글·파일을 찍고 종료 코드 2, 카톡을 건드리지 않음).
   --window  : 채팅 창 제목(방 이름). 창이 열려 있어야 한다 — 이 스크립트는 창을 열지 않는다.
   --file    : 보낼 글이 든 텍스트 파일.
   --photo   : 보낼 사진(여러 번 쓸 수 있다). DB에서 type 2(사진)·27(여러 장)로 확인한다.
@@ -14,7 +15,7 @@
 전송이 DB에서 확인되면 지운다(원래 ~/Downloads에 있던 파일은 그대로 쓰고 지우지 않는다).
 같은 이름의 다른 파일이 ~/Downloads에 있으면 덮지 않고 멈춘다(STAGE_CONFLICT).
 열쇠·DB 경로는 kakao_db.py와 같은 규칙(KAKAO_DB_KEY·KAKAO_DB_PATH·KAKAO_ENV_FILE)으로 읽는다.
-끝 줄: SENT_OK <KST 시각> | DRYRUN_OK | FAIL <단계>   (종료 코드 0이면 성공)
+끝 줄: SENT_OK <KST 시각> | DRYRUN_OK | PREVIEW_ONLY | FAIL <단계>   (종료 코드 0이면 성공)
 권한: 손쉬운 사용(System Events), 전체 디스크 접근(DB 확인).
 """
 import argparse
@@ -64,6 +65,23 @@ def kst(sent_at: int) -> str:
     return time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(sent_at + 9 * 3600))
 
 
+def preview(where: str, items: list[tuple[str, str]]) -> int:
+    """--send 없이 돌리면 보낼 것만 찍고 아무것도 건드리지 않는다(남에게 닿는 스크립트는 기본이 미리보기)."""
+    print(f'PREVIEW 보낼 곳: {where}')
+    for kind, p in items:
+        if kind == 'text':
+            try:
+                body = open(p, encoding='utf-8').read()
+            except OSError as e:
+                print(f'PREVIEW 글 {p}: 못 읽음 {e}')
+                continue
+            print(f"PREVIEW 글({len(body)}자): {body[:200].replace(chr(10), ' / ')}")
+        else:
+            print(f'PREVIEW {kind}: {p}')
+    print('PREVIEW_ONLY 보내지 않았다 — 실제로 보내려면 --send, 입력칸 시험은 --dry-run')
+    return 2
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description='열린 카카오톡 채팅 창으로 보내고 DB로 확인한다')
     ap.add_argument('--window', required=True)
@@ -72,7 +90,9 @@ def main() -> int:
     ap.add_argument('--photo', dest='items', action='append', type=lambda s: ('photo', s), help='보낼 사진')
     ap.add_argument('--attach', dest='items', action='append', type=lambda s: ('attach', s), help='보낼 파일')
     ap.add_argument('--me', type=int, help='내 user id (없으면 KAKAO_USER_ID)')
-    ap.add_argument('--dry-run', action='store_true')
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument('--send', action='store_true', help='실제로 보낸다(없으면 미리보기)')
+    mode.add_argument('--dry-run', action='store_true')
     a = ap.parse_args()
     if not a.items:
         ap.error('--file·--photo·--attach 중 하나는 있어야 한다')
@@ -80,6 +100,8 @@ def main() -> int:
         if not os.path.isfile(p):
             print(f'FAIL NO_SUCH_FILE {p}')
             return 1
+    if not a.send and not a.dry_run:
+        return preview(f'창 「{a.window}」 chat {a.chat_id}', a.items)
 
     key, me = '', 0
     if not a.dry_run:

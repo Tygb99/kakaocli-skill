@@ -1,6 +1,6 @@
 ---
 name: kakaocli-auth
-description: "macOS kakaocli로 카카오톡 로컬 DB를 열어 대화를 검색·조회할 때 쓰는 인증과 조회 절차. '카톡 검색해줘', '톡방에서 찾아봐', '오픈채팅에서 ~ 관련 내용 찾아줘', '카카오톡 대화 읽어줘', '누가 그 말 했어?', '보낸 사람 이름도 보여줘', 'kakaocli 인증이 안 돼', 'auth 실패', 'User ID auto-detection failed', 'PRAGMA key failed' 같은 상황이면 이 스킬을 쓸 것. user ID 자동탐지는 사실상 항상 실패하므로 브루트포스로 뚫고 키를 직접 유도해야 하며, 발신자 이름은 NTUser 조인으로 붙인다 — 이 두 가지를 모르면 시작조차 못 하거나 전부 Unknown으로만 보인다. 조회가 느릴 때('카톡 조회가 느려', 'query가 오래 걸려')는 열쇠·DB 경로를 env에 두고 --db를 넘기는 절차를, '카톡 보내줘', '열린 채팅 창에 글 넣어줘', '사진 보내줘', '파일 보내줘'처럼 이미 열린 채팅 창으로 보낼 때는 kakao-send.py(dry-run·DB 확인)를, 오픈채팅 답장이 어느 글에 달린 말인지 판정할 때는 threadId(scope 3)를 다룬다. 채팅 창 열기 같은 일반 UI 자동화는 다루지 않는다."
+description: "macOS kakaocli로 카카오톡 로컬 DB를 열어 대화를 검색·조회할 때 쓰는 인증과 조회 절차. '카톡 검색해줘', '톡방에서 찾아봐', '오픈채팅에서 ~ 관련 내용 찾아줘', '카카오톡 대화 읽어줘', '누가 그 말 했어?', '보낸 사람 이름도 보여줘', 'kakaocli 인증이 안 돼', 'auth 실패', 'User ID auto-detection failed', 'PRAGMA key failed' 같은 상황이면 이 스킬을 쓸 것. user ID 자동탐지는 사실상 항상 실패하므로 브루트포스로 뚫고 키를 직접 유도해야 하며, 발신자 이름은 NTUser 조인으로 붙인다 — 이 두 가지를 모르면 시작조차 못 하거나 전부 Unknown으로만 보인다. 조회가 느릴 때('카톡 조회가 느려', 'query가 오래 걸려')는 열쇠·DB 경로를 env에 두고 --db를 넘기는 절차를, '카톡 보내줘', '열린 채팅 창에 글 넣어줘', '사진 보내줘', '파일 보내줘'처럼 이미 열린 채팅 창으로 보낼 때는 kakao-send.py(기본 미리보기·실제 전송 --send·dry-run·DB 확인)를, 오픈채팅 답장이 어느 글에 달린 말인지 판정할 때는 threadId(scope 3)를 다룬다. 채팅 창 열기 같은 일반 UI 자동화는 다루지 않는다."
 ---
 
 # kakaocli 인증
@@ -307,17 +307,19 @@ kakaocli query "<SQL>" --db "$KAKAO_DB_PATH" --key "$KAKAO_DB_KEY"
 
 ```bash
 export KAKAO_ENV_FILE=~/.config/<이름>/secrets.env
-python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt --dry-run   # 넣었다 지우기만
-python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt --me <USER_ID>
+python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt              # 미리보기만(기본, 카톡 안 건드림)
+python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt --dry-run    # 넣었다 지우기만
+python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt --me <USER_ID> --send
 # 사진·파일: --photo / --attach (여러 번 쓸 수 있다, --file과 섞어도 된다 — 적은 순서대로 하나씩 보낸다)
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --photo a.jpg --attach report.pdf --dry-run
-python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --photo a.jpg --attach report.pdf --me <USER_ID>
+python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --photo a.jpg --attach report.pdf --me <USER_ID> --send
 ```
 
 `--file`은 **보낼 글이 든 텍스트 파일**이다. 파일 자체를 보내려면 `--attach`를 쓴다.
 
 | 끝 줄 | 뜻 |
 |---|---|
+| `PREVIEW_ONLY` | `--send`도 `--dry-run`도 없어서 보낼 곳·글·파일만 찍었다(종료 코드 2). 카톡을 건드리지 않았다 |
 | `DRYRUN_OK` | 글은 넣은 값이 파일과 같았고 다시 비웠다. 사진·파일은 확인 시트 「1개 전송」까지 갔다가 취소했다. 보내지 않았다 |
 | `SENT_OK <KST>` | 모두 DB에서 내 메시지로 찾았다. 항목마다 `TEXT_OK`·`PHOTO_OK type=2 …`·`ATTACH_OK type=18 …` 줄이 앞에 나온다 |
 | `FAIL STAGE_CONFLICT` | `~/Downloads`에 같은 이름의 다른 파일이 있다. 덮지 않는다 — 파일 이름을 바꿔서 다시 |
@@ -331,7 +333,7 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --phot
 - `kakao-send-ui.js`(JXA)는 창의 scrollArea 안 `textArea`(description `메시지 입력`)와 `button 전송`만 바로 짚는다(약 0.2초). **창 전체 접근성 트리를 훑지 마라** — 창 전체를 읽으면 25~30초, System Events로 목록 행을 훑으면 150초가 넘는다.
 - 카카오톡은 `AXPress`에 오류를 돌려줘도 실제로 보낸다. 그래서 성공은 DB(내 `authorId`, 누른 시각 이후, 앞 40자 일치)로만 판단한다. `NOT_IN_DB`가 나오면 **다시 보내기 전에 DB로 그 방을 먼저 확인한다**(중복 전송 방지).
 - 창 제목은 방 이름 그대로다(나와의 채팅은 내 이름 — DB에서는 `NTChatRoom.type=5`인 방). 창 여는 법(실측): 카톡 본창 「채팅」·「오픈채팅」 탭 → 목록에서 방을 더블클릭. 마우스 없이는 그 행의 셀에 `AXShowMenu` → 「채팅방 열기」 AXPress(카톡을 앞으로 띄우지 않는다). 행을 찾을 때는 `rows.uiElements[0].staticTexts.value()`로 한 번에 읽는다(600행에 약 50초). 검색칸에 값만 넣으면(setValue) 결과가 안 뜬다. 카카오톡을 재시작하면 열린 채팅 창이 모두 닫힌다.
-- 처음 쓰는 방·창이면 `--dry-run`부터. 실제 전송은 사용자가 시킨 글만 한다.
+- **기본은 미리보기다** — 실제 전송은 `--send`가 있을 때만(남에게 닿는 스크립트는 기본이 미리보기). 처음 쓰는 방·창이면 `--dry-run`부터. 실제 전송은 사용자가 시킨 글만 한다.
 - 권한: 손쉬운 사용(osascript를 부르는 앱), 전체 디스크 접근(DB 확인).
 - `메시지 입력`·`전송`은 한국어 UI에서 확인한 이름이다. 다른 언어 UI면 `kakao-send-ui.js`의 두 문자열을 바꾼다.
 - JXA 메모: `app.read(path, {as:'utf8'})`는 null을 준다 → `$.NSString.stringWithContentsOfFileEncodingError`로 읽는다.
@@ -360,7 +362,7 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --phot
 - [ ] **`GROUP BY m.logId`로 묶었는가** (안 묶으면 건수가 몇 배로 부풀려진다)
 - [ ] 반복 조회라면 `KAKAO_DB_KEY`·`KAKAO_DB_PATH`를 env 파일(권한 600)에 두고 `--db`를 넘겼는가, 파일 내용을 화면에 찍지 않았는가(§7)
 - [ ] 오픈채팅에서 누가 누구에게 답했는지 판정할 때 순서가 아니라 `scope=3`·`threadId`를 봤는가(§5)
-- [ ] 보낼 때 창이 열려 있고 입력칸이 비었는가, 처음이면 `--dry-run`부터, 성공은 `SENT_OK`(DB 확인)로만 판단했는가(§8)
+- [ ] 보낼 때 창이 열려 있고 입력칸이 비었는가, 실제 전송에 `--send`를 붙였는가, 처음이면 `--dry-run`부터, 성공은 `SENT_OK`(DB 확인)로만 판단했는가(§8)
 - [ ] 사진·파일은 `--photo`·`--attach`로 보냈는가(`--file`은 글), 시험 전송은 나와의 채팅에만 했는가(§8-1)
 - [ ] 이 기기 값(user ID·chatId·방 이름)을 SKILL.md가 아니라 `LOCAL.md`에 적었는가(§6)
 - [ ] 사진을 찾고 있다면 — 로컬/Cache.db 말고 `scripts/extract-photos.py`(NTChatMessage type=2·27)로 받았는가. 4일 지난 건 410이라 사용자 캡처로 넘겼는가(§5)
