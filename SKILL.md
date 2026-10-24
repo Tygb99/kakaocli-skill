@@ -303,14 +303,14 @@ kakaocli query "<SQL>" --db "$KAKAO_DB_PATH" --key "$KAKAO_DB_KEY"
 
 ## 8. 열린 채팅 창으로 보내기(글·사진·파일) — `scripts/kakao-send.py`
 
-사용자의 마우스·키보드를 쓰지 않고(System Events 접근성만) **이미 열린** 채팅 창으로 글·사진·파일을 보낸 뒤, DB에 내 메시지가 생겼는지로 성공을 판정한다.
+사용자의 마우스·키보드를 쓰지 않고(System Events 접근성만) **이미 열린** 채팅 창으로 글·사진·파일을 보낸 뒤, DB에 내 메시지가 생겼는지로 성공을 판정한다. 사진·파일은 클립보드로 붙이므로 그동안 카톡이 몇 초 앞으로 온다(§8-1).
 
 ```bash
 export KAKAO_ENV_FILE=~/.config/<이름>/secrets.env
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt              # 미리보기만(기본, 카톡 안 건드림)
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt --dry-run    # 넣었다 지우기만
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt --me <USER_ID> --send
-# 사진·파일: --photo / --attach (여러 번 쓸 수 있다, --file과 섞어도 된다 — 적은 순서대로 하나씩 보낸다)
+# 사진·파일: --photo / --attach (여러 번 쓸 수 있다, --file과 섞어도 된다 — 적은 순서대로, 같은 종류가 이어지면 한 번에 붙인다)
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --photo a.jpg --attach report.pdf --dry-run
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --photo a.jpg --attach report.pdf --me <USER_ID> --send
 ```
@@ -320,11 +320,11 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --phot
 | 끝 줄 | 뜻 |
 |---|---|
 | `PREVIEW_ONLY` | `--send`도 `--dry-run`도 없어서 보낼 곳·글·파일만 찍었다(종료 코드 2). 카톡을 건드리지 않았다 |
-| `DRYRUN_OK` | 글은 넣은 값이 파일과 같았고 다시 비웠다. 사진·파일은 확인 시트 「1개 전송」까지 갔다가 취소했다. 보내지 않았다 |
-| `SENT_OK <KST>` | 모두 DB에서 내 메시지로 찾았다. 항목마다 `TEXT_OK`·`PHOTO_OK type=2 …`·`ATTACH_OK type=18 …` 줄이 앞에 나온다 |
+| `DRYRUN_OK` | 글은 넣은 값이 파일과 같았고 다시 비웠다. 사진·파일은 붙여 넣어 확인 시트 「N개 전송」까지 갔다가 취소했다. 보내지 않았다 |
+| `SENT_OK <KST>` | 모두 DB에서 내 메시지로 찾았다. 항목마다 `TEXT_OK`·`PHOTO_OK type=2 …`(여러 장 묶음은 type=27)·`ATTACH_OK type=18 …` 줄이 앞에 나온다 |
 | `FAIL STAGE_CONFLICT` | `~/Downloads`에 같은 이름의 다른 파일이 있다. 덮지 않는다 — 파일 이름을 바꿔서 다시 |
 | `FAIL TYPE_MISMATCH` | 보내졌지만 기대한 종류가 아니다(예: `--photo`에 사진이 아닌 파일을 줘서 type 18로 갔다). 다시 보내지 마라 |
-| `FAIL NO_OPEN_PANEL`·`FILE_NOT_IN_LIST`·`NO_CONFIRM_SHEET` | 열기 창·목록·확인 시트 단계에서 멈췄다. 보내지 않았다 |
+| `FAIL NO_PASTE_MENU`·`NO_CONFIRM_SHEET`·`COUNT_MISMATCH` | 붙여넣기 메뉴·확인 시트 단계에서 멈췄거나 시트의 개수가 달랐다(취소함). 보내지 않았다 |
 | `FAIL WINDOW_NOT_OPEN` | 그 제목의 창이 없다 — 이 스크립트는 창을 열지 않는다 |
 | `FAIL BOX_NOT_EMPTY` | 입력칸에 이미 글이 있다. 덮지도 지우지도 않는다 |
 | `FAIL VALUE_MISMATCH` | 넣은 값이 파일과 달라 입력칸을 비우고 멈췄다 |
@@ -338,15 +338,14 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --phot
 - `메시지 입력`·`전송`은 한국어 UI에서 확인한 이름이다. 다른 언어 UI면 `kakao-send-ui.js`의 두 문자열을 바꾼다.
 - JXA 메모: `app.read(path, {as:'utf8'})`는 null을 준다 → `$.NSString.stringWithContentsOfFileEncodingError`로 읽는다.
 
-### 8-1. 사진·파일은 「파일전송」 열기 창으로 고른다 — `kakao-attach-ui.js`
+### 8-1. 사진·파일은 1장·1개여도 클립보드로 붙인다 — `kakao-clip-ui.js`
 
-- 순서: 입력칸 옆 버튼(help `파일전송 ⌘O`) AXPress → 열기 시트 위치를 「다운로드」로(아니면 사이드바 행 선택) → 목록에서 파일 행 `selected` → 「열기」 → 확인 시트 「1개 전송」. 성공은 DB의 새 행 type으로만 판정한다(사진 2, 파일 18, 여러 장 묶음 27).
-- **카톡을 앞으로 띄우지 않고 클립보드도 안 쓴다**(실측: 다른 앱이 맨 앞인 채로 전송, 전후 frontmost 동일). 화면에는 그 채팅 창에 시트가 잠깐 뜬다.
-- 열기 창에는 경로 입력칸이 없다(⌘⇧G는 키 입력이 필요). 그래서 `kakao-send.py`가 파일을 **같은 이름으로 `~/Downloads`에 잠깐 복사**하고, DB에서 확인되면 지운다. 이름을 바꾸지 않는 것은 받는 사람에게 파일 이름이 그대로 보이기 때문이다. `NOT_IN_DB`면 복사본을 남겨 두고 경로를 알려 준다.
-- **한 번에 하나씩** 보낸다. 열기 창 목록은 접근성으로 여러 행을 고를 수 없다(`AXSelectedRows` 설정은 무시되고, 행 `selected`는 앞 선택을 푼다). 그래서 사진 여러 장도 묶음(type 27)이 아니라 한 장씩(type 2) 간다.
-- 열기 창이 목록 보기가 아니면(아이콘·칼럼) `NO_LIST_VIEW`로 멈춘다. 사람이 목록 보기로 한 번 바꾸면 카톡이 기억한다.
-- 다른 길 — 클립보드 붙여넣기(NSPasteboard에 파일 URL → 「편집 → Paste」 → 「1개 전송」)은 예전에 전송된 기록이 있다. 하지만 **카톡이 맨 앞 앱일 때만** 동작한다(뒤에 있으면 Paste가 아무 일도 안 한다 — 창 AXRaise·AXMain·AXFocused로도 안 됨). 카톡을 앞으로 띄우고 사용자 클립보드를 덮어쓰므로 쓰지 않는다.
-- `파일전송 ⌘O`·`다운로드`·`위치:`·`목록 보기`·`사이드바`·`열기`·`취소`·`1개 전송`은 한국어 UI에서 확인한 이름이다.
+- 순서: 클립보드를 통째로 저장 → NSPasteboard에 파일 URL·`NSFilenamesPboardType` → 카톡을 잠깐 앞으로, 그 창 AXRaise, 입력칸(`메시지 입력`) 초점 → 메뉴 「편집 → 붙여넣기」 AXPress → 확인 시트 「N개 전송」 → (사진 여러 장이면 「묶어보내기」 안내 시트 「확인」) → 쓰던 앱을 다시 앞으로 → 클립보드 되돌림. 성공은 DB의 새 행 type으로만 판정한다(사진 2, 파일 18, 여러 장 묶음 27).
+- **카톡이 맨 앞 앱일 때만** 붙여넣기가 먹는다(뒤에 있으면 아무 일도 안 한다 — 창 AXRaise·AXMain·AXFocused로도 안 됨). 그래서 몇 초 앞으로 띄우고, 끝나면 원래 맨 앞 앱(PID로 비교)과 원래 클립보드(모든 항목·종류)를 되돌린다. 출력 JSON의 `clipRestored`·`clipTextSame`으로 확인한다.
+- 붙여넣기는 `~/Downloads` 아래 파일만 받는다(외장 디스크 경로는 「존재하지 않는 항목」). 그래서 `kakao-send.py`가 다른 곳의 파일을 **같은 이름으로 `~/Downloads`에 잠깐 복사**하고 끝나면 지운다. 이름을 바꾸지 않는 것은 받는 사람에게 파일 이름이 그대로 보이기 때문이다. `NOT_IN_DB`면 복사본을 남겨 두고 경로를 알려 준다.
+- 같은 종류(`--photo`끼리, `--attach`끼리)가 이어지면 한 번에 붙인다. 사진 여러 장은 「사진 N장」 묶음 하나(type 27)로 간다.
+- 예전 길 — 「파일전송 ⌘O」 열기 창에서 `~/Downloads` 목록으로 고르는 `kakao-attach-ui.js`는 카톡을 앞으로 띄우지 않지만, 행 선택이 가끔 안 먹고(`NOT_SELECTED`, 2026-10-24 실측) 한 번에 하나만 고를 수 있다. `kakao-send.py`는 더 이상 이 길을 쓰지 않는다(파일은 손으로 부를 수 있게 남겨 둔다).
+- `편집`·`붙여넣기`(또는 `Paste`)·`메시지 입력`·`취소`·`N개 전송`·`확인`은 한국어 UI에서 확인한 이름이다.
 
 ---
 

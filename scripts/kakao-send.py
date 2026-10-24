@@ -8,11 +8,13 @@
   --file    : 보낼 글이 든 텍스트 파일.
   --photo   : 보낼 사진(여러 번 쓸 수 있다). DB에서 type 2(사진)·27(여러 장)로 확인한다.
   --attach  : 보낼 파일(여러 번 쓸 수 있다). DB에서 type 18(파일)로 확인한다.
-              글·사진·파일은 적은 순서대로 하나씩 보낸다. 사진 여러 장도 한 장씩 따로 간다(묶음 아님).
+              글·사진·파일은 적은 순서대로 보낸다. 같은 종류가 이어지면 한 번에 붙인다 — 사진 여러 장은 「사진 N장」 묶음(type 27).
   --me      : 내 user id. 없으면 KAKAO_USER_ID(환경변수 또는 KAKAO_ENV_FILE). 실제 전송 확인에만 쓴다.
-  --dry-run : 글은 입력칸에 넣었다 지우고, 사진·파일은 확인 시트(「1개 전송」)까지 가서 취소한다. 보내지 않는다.
-사진·파일은 「파일전송」 열기 창에서 ~/Downloads 목록으로 고른다. 그래서 ~/Downloads에 같은 이름으로 잠깐 복사하고
-전송이 DB에서 확인되면 지운다(원래 ~/Downloads에 있던 파일은 그대로 쓰고 지우지 않는다).
+  --dry-run : 글은 입력칸에 넣었다 지우고, 사진·파일은 확인 시트(「N개 전송」)까지 가서 취소한다. 보내지 않는다.
+사진·파일은 1장·1개여도 클립보드로 붙인다(kakao-clip-ui.js): 카톡을 몇 초 앞으로 띄워 「편집 → 붙여넣기」하고,
+끝나면 쓰던 앱과 원래 클립보드를 되돌린다. 「파일전송」 열기 창(kakao-attach-ui.js)은 쓰지 않는다.
+붙여넣기는 ~/Downloads 아래 파일만 받으므로 다른 곳의 파일은 ~/Downloads에 같은 이름으로 잠깐 복사하고
+끝나면 지운다(원래 ~/Downloads에 있던 파일은 그대로 쓰고 지우지 않는다).
 같은 이름의 다른 파일이 ~/Downloads에 있으면 덮지 않고 멈춘다(STAGE_CONFLICT).
 열쇠·DB 경로는 kakao_db.py와 같은 규칙(KAKAO_DB_KEY·KAKAO_DB_PATH·KAKAO_ENV_FILE)으로 읽는다.
 끝 줄: SENT_OK <KST 시각> | DRYRUN_OK | PREVIEW_ONLY | FAIL <단계>   (종료 코드 0이면 성공)
@@ -115,9 +117,15 @@ def main() -> int:
             print(f'FAIL KEY {e}')
             return 1
 
-    last = ''
+    groups: list[tuple[str, list[str]]] = []
     for kind, p in a.items:
-        rc, last = (send_text if kind == 'text' else send_attachment)(a, kind, p, key, me)
+        if kind != 'text' and groups and groups[-1][0] == kind:
+            groups[-1][1].append(p)
+        else:
+            groups.append((kind, [p]))
+    last = ''
+    for kind, ps in groups:
+        rc, last = send_text(a, kind, ps[0], key, me) if kind == 'text' else send_attachment(a, kind, ps, key, me)
         if rc:
             return rc
     print('DRYRUN_OK' if a.dry_run else f'SENT_OK {last}')
@@ -161,16 +169,25 @@ def send_text(a: argparse.Namespace, _kind: str, p: str, key: str, me: int) -> t
     return 1, ''
 
 
-def send_attachment(a: argparse.Namespace, kind: str, p: str, key: str, me: int) -> tuple[int, str]:
+def send_attachment(a: argparse.Namespace, kind: str, paths: list[str], key: str, me: int) -> tuple[int, str]:
+    copies: list[str] = []
+    staged: list[str] = []
     try:
-        staged, remove = stage(p)
+        for p in paths:
+            dst, made = stage(p)
+            staged.append(dst)
+            if made:
+                copies.append(dst)
     except FileExistsError as e:
+        for c in copies:
+            os.remove(c)
         print(f'FAIL STAGE_CONFLICT {e} (같은 이름의 다른 파일이 있다)')
         return 1, ''
+    n = len(staged)
     keep = False
     try:
         if a.dry_run:
-            res = osa('kakao-attach-ui.js', a.window, 'check', os.path.basename(staged))
+            res = osa('kakao-clip-ui.js', a.window, 'check', *staged)
             print(json.dumps(res, ensure_ascii=False))
             if not res.get('ok'):
                 print(f"FAIL {res.get('step')}")
@@ -180,7 +197,7 @@ def send_attachment(a: argparse.Namespace, kind: str, p: str, key: str, me: int)
         types = TYPES[kind]
         before = kakao_db.q(key, f"SELECT coalesce(max(logId),0) FROM NTChatMessage WHERE chatId={a.chat_id}")[0][0]
         start = int(time.time()) - 2
-        res = osa('kakao-attach-ui.js', a.window, 'send', os.path.basename(staged))
+        res = osa('kakao-clip-ui.js', a.window, 'send', *staged)
         print(json.dumps(res, ensure_ascii=False))
         if not res.get('ok'):
             print(f"FAIL {res.get('step')}")
@@ -188,21 +205,24 @@ def send_attachment(a: argparse.Namespace, kind: str, p: str, key: str, me: int)
         for _ in range(30):
             rows = kakao_db.q(key, f"SELECT logId, type, sentAt, message FROM NTChatMessage WHERE chatId={a.chat_id} "
                                    f"AND authorId={me} AND sentAt>={start} AND logId>{before} "
-                                   f"ORDER BY sentAt LIMIT 1")
-            if rows:
-                log_id, typ, sent_at, message = rows[0]
-                if typ not in types:
-                    print(f'FAIL TYPE_MISMATCH 보낸 것은 맞다(logId {log_id}) — type {typ}, 기대 {types}')
-                    return 1, ''
-                print(f'{kind.upper()}_OK type={typ} logId={log_id} {kst(sent_at)} {str(message)[:40]}')
-                return 0, kst(sent_at)
+                                   f"ORDER BY logId")
+            bad = [r for r in rows if r[1] not in types]
+            if bad:
+                print(f'FAIL TYPE_MISMATCH 보낸 것은 맞다(logId {bad[0][0]}) — type {bad[0][1]}, 기대 {types}')
+                return 1, ''
+            if any(r[1] == 27 for r in rows) or len(rows) >= n:
+                for log_id, typ, sent_at, message in rows:
+                    print(f'{kind.upper()}_OK type={typ} logId={log_id} {kst(sent_at)} {str(message)[:40]}')
+                return 0, kst(rows[-1][2])
             time.sleep(1)
         keep = True
-        print(f'FAIL NOT_IN_DB — 다시 보내기 전에 DB로 그 방을 먼저 본다. 복사본은 남겨 둔다: {staged}')
+        print(f'FAIL NOT_IN_DB — 다시 보내기 전에 DB로 그 방을 먼저 본다. 복사본은 남겨 둔다: {copies}')
         return 1, ''
     finally:
-        if remove and not keep and os.path.exists(staged):
-            os.remove(staged)
+        if not keep:
+            for c in copies:
+                if os.path.exists(c):
+                    os.remove(c)
 
 
 if __name__ == '__main__':

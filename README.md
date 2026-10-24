@@ -32,7 +32,7 @@ ln -s ~/skills/kakaocli-auth ~/.claude/skills/kakaocli-auth     # Claude Code. �
 | `recover-uid.py` | 계정 해시로 user ID 복구(멀티코어) |
 | `derive-key.py` | Device UUID + user ID → DB 열쇠 |
 | `kakao_db.py` | env의 열쇠·DB 경로로 빠른 질의 (모듈·명령 겸용) |
-| `kakao-send.py` + `kakao-send-ui.js` + `kakao-attach-ui.js` | 열린 채팅 창으로 글·사진·파일을 보내고 DB로 확인 |
+| `kakao-send.py` + `kakao-send-ui.js` + `kakao-clip-ui.js` | 열린 채팅 창으로 글·사진·파일을 보내고 DB로 확인(사진·파일은 클립보드로 붙인다. 예전 열기 창 방식 `kakao-attach-ui.js`는 손으로만) |
 | `extract-photos.py` | 사진 메시지의 원본 URL로 받아 방·발신자·시각 붙이기 |
 
 ## 출처
