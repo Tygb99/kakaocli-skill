@@ -5,7 +5,7 @@
 
 macOS 카카오톡 데스크톱의 로컬 DB를 [kakaocli](https://github.com/silver-flight-group/kakaocli)로 읽고, 키보드·마우스 없이 손쉬운 사용(접근성)으로 채팅 창을 열고 글·사진·답장·멘션을 보내는 에이전트 스킬이다. 본문은 [`SKILL.md`](SKILL.md).
 
-이 스킬을 어떻게 만들고 석 달 동안 무엇을 고쳤는지는 블로그 글 [「카톡을 AI 에이전트에게 맡긴 방법」](https://yongjjang.tygb99.com/blog/kakaocli-agent/)에 적었다.
+이 스킬을 어떻게 만들었고, 내 AI 에이전트 도리가 자기 카톡 계정으로 지내며 무엇에 막히고 어떻게 고쳤는지는 블로그 글 [「도리가 카톡을 쓰면서 배운 것」](https://yongjjang.tygb99.com/blog/kakaocli-agent/)에 적었다.
 
 - user ID 자동탐지 실패 우회(브루트포스 복구)와 키 직접 유도
 - 발신자 이름 조인, KST 변환, 사진 원본 받기
