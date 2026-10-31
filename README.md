@@ -5,9 +5,12 @@
 
 macOS 카카오톡 데스크톱의 로컬 DB를 [kakaocli](https://github.com/silver-flight-group/kakaocli)로 읽고, 이미 열린 채팅 창으로 글을 보내는 에이전트 스킬이다. 본문은 [`SKILL.md`](SKILL.md).
 
+이 스킬을 어떻게 만들고 석 달 동안 무엇을 고쳤는지는 블로그 글 [「카톡을 AI 에이전트에게 맡긴 방법」](https://yongjjang.tygb99.com/blog/kakaocli-agent/)에 적었다.
+
 - user ID 자동탐지 실패 우회(브루트포스 복구)와 키 직접 유도
 - 발신자 이름 조인, KST 변환, 사진 원본 받기
 - 열쇠·DB 경로를 env에 두고 `--db`로 넘겨 조회를 0.1초대로
+- 큰 ID 정밀도, 보내는 중인 임시 줄, 수정 기록 같은 조회 함정
 - 열린 채팅 창으로 글·사진·파일을 보내고 DB로 전송 확인(기본은 미리보기, 실제 전송은 `--send`, `--dry-run` 지원)
 - 오픈채팅 스레드 답장(`scope=3`, `threadId`) 판정
 
@@ -42,3 +45,7 @@ ln -s ~/skills/kakaocli-auth ~/.claude/skills/kakaocli-auth     # Claude Code. �
 - kakaocli 라이선스 전문은 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 이 기기에서만 쓰는 값(user ID, 방 목록 등)은 `LOCAL.md`에 둔다. `.gitignore`로 저장소에서 빠진다. 열쇠는 env 파일(권한 600)에만 두고 저장소에 넣지 않는다.
+
+## 라이선스
+
+[MIT](LICENSE). 단 `scripts/derive-key.py`·`scripts/recover-uid.py`가 기대는 kakaocli 쪽 코드는 kakaocli의 MIT 고지를 따른다([`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)).
