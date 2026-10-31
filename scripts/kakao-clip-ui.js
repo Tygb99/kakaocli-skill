@@ -1,4 +1,4 @@
-// 카톡(사장 계정, com.kakao.KakaoTalkMac)의 열린 채팅 창에 사진·파일을 클립보드로 붙여 보낸다. 1장·1개도 이 길로 간다(2026-10-24).
+// 카카오톡의 열린 채팅 창에 사진·파일을 클립보드로 붙여 보낸다. 1장·1개도 이 길로 간다(2026-10-24).
 // 사용: osascript -l JavaScript kakao-clip-ui.js <창 제목> <check|send> <~/Downloads/파일1> [파일2 ...]
 //  check : 붙여 넣어 확인 시트 「N개 전송」이 뜨는 것까지 보고 「취소」(보내지 않는다)
 //  send  : 확인 시트의 「N개 전송」을 누른다(사진 여러 장이면 「사진 N장」 묶음, 「묶어보내기」 안내 시트가 뜨면 「확인」)
@@ -8,7 +8,27 @@
 // (외장 디스크 경로는 「존재하지 않는 항목」) — kakao-send.py가 같은 이름으로 복사하고 지운다.
 // 창·메뉴·버튼 이름(편집, 붙여넣기/Paste, 메시지 입력, 취소, N개 전송, 확인)은 한국어 UI에서 확인한 값이다.
 // 출력: 한 줄 JSON {ok, step, ...}. 실제 전송 성공 판정은 이 출력이 아니라 DB의 새 행 type.
+// 대상 앱: 환경변수 KAKAO_BUNDLE_ID(기본 com.kakao.KakaoTalkMac), KAKAO_PID(있으면 그 PID 하나만, 번들 ID가 다르면 멈춤).
 ObjC.import('AppKit');
+
+function kakaoProcess(se) {
+  const env = $.NSProcessInfo.processInfo.environment;
+  const get = (k) => { const v = env.objectForKey(k); return v.isNil() ? '' : ObjC.unwrap(v); };
+  const bundle = get('KAKAO_BUNDLE_ID') || 'com.kakao.KakaoTalkMac';
+  const pid = Number(get('KAKAO_PID') || 0);
+  if (pid) {
+    const ps = se.processes.whose({ unixId: pid })();
+    if (!ps.length) return { err: 'NO_APP', pid };
+    const b = ps[0].bundleIdentifier();
+    if (b !== bundle) return { err: 'WRONG_APP', pid, bundle: b, want: bundle };
+    return { p: ps[0] };
+  }
+  const ps = se.processes.whose({ bundleIdentifier: bundle })();
+  if (!ps.length) return { err: 'NO_APP', bundle };
+  if (ps.length > 1) return { err: 'APP_COUNT', bundle, n: ps.length };
+  return { p: ps[0] };
+}
+
 
 function saveBoard(pb) {
   const saved = [];
@@ -56,9 +76,9 @@ function run(argv) {
 
   let p;
   try {
-    const ps = se.processes.whose({ bundleIdentifier: 'com.kakao.KakaoTalkMac' })();
-    if (!ps.length) return done({ step: 'NO_APP' });
-    p = ps[0];
+    const k = kakaoProcess(se);
+    if (k.err) return done(Object.assign({ step: k.err }, k));
+    p = k.p;
   } catch (e) { return done({ step: 'AX_ERROR', err: String(e).slice(0, 200) }); }
   const hasBox = (x) => { try { return x.scrollAreas().some((sa) => sa.textAreas().some((ta) => { try { return ta.description() === '메시지 입력'; } catch (e) { return false; } })); } catch (e) { return false; } };
   const w = (() => { try { return p.windows().find((x) => { try { return x.name() === title && hasBox(x); } catch (e) { return false; } }); } catch (e) { return null; } })();

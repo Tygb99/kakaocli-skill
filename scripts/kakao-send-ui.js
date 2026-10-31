@@ -5,14 +5,35 @@
 //  send  : 입력칸이 비어 있을 때만 글을 넣고 전송 버튼을 누른다
 //  clear : 입력칸에 이 글과 똑같은 글이 있을 때만 비운다(사용자가 치던 글은 건드리지 않음)
 // 출력: 한 줄 JSON {ok, step, ...}
+// 대상 앱: 환경변수 KAKAO_BUNDLE_ID(기본 com.kakao.KakaoTalkMac), KAKAO_PID(있으면 그 PID 하나만, 번들 ID가 다르면 멈춤).
+ObjC.import('Foundation');
+
+function kakaoProcess(se) {
+  const env = $.NSProcessInfo.processInfo.environment;
+  const get = (k) => { const v = env.objectForKey(k); return v.isNil() ? '' : ObjC.unwrap(v); };
+  const bundle = get('KAKAO_BUNDLE_ID') || 'com.kakao.KakaoTalkMac';
+  const pid = Number(get('KAKAO_PID') || 0);
+  if (pid) {
+    const ps = se.processes.whose({ unixId: pid })();
+    if (!ps.length) return { err: 'NO_APP', pid };
+    const b = ps[0].bundleIdentifier();
+    if (b !== bundle) return { err: 'WRONG_APP', pid, bundle: b, want: bundle };
+    return { p: ps[0] };
+  }
+  const ps = se.processes.whose({ bundleIdentifier: bundle })();
+  if (!ps.length) return { err: 'NO_APP', bundle };
+  if (ps.length > 1) return { err: 'APP_COUNT', bundle, n: ps.length };
+  return { p: ps[0] };
+}
+
 function run(argv) {
   const [title, file, mode] = argv;
   let phase = 'start';
   try {
     const se = Application('System Events');
-    const p = se.processes.byName('KakaoTalk');
-    if (!p.exists()) return JSON.stringify({ ok: false, step: 'NO_APP' });
-    ObjC.import('Foundation');
+    const k = kakaoProcess(se);
+    if (k.err) return JSON.stringify(Object.assign({ ok: false, step: k.err }, k));
+    const p = k.p;
     const msg = ObjC.unwrap($.NSString.stringWithContentsOfFileEncodingError(file, $.NSUTF8StringEncoding, null));
     if (typeof msg !== 'string' || !msg.length) return JSON.stringify({ ok: false, step: 'FILE_READ', file });
     const norm = (s) => (s || '').replace(/\r\n?/g, '\n');

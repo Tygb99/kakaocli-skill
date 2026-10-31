@@ -1,6 +1,6 @@
 ---
 name: kakaocli-auth
-description: "macOS kakaocli로 카카오톡 로컬 DB를 열어 대화를 검색·조회할 때 쓰는 인증과 조회 절차. '카톡 검색해줘', '톡방에서 찾아봐', '오픈채팅에서 ~ 관련 내용 찾아줘', '카카오톡 대화 읽어줘', '누가 그 말 했어?', '보낸 사람 이름도 보여줘', 'kakaocli 인증이 안 돼', 'auth 실패', 'User ID auto-detection failed', 'PRAGMA key failed' 같은 상황이면 이 스킬을 쓸 것. user ID 자동탐지는 사실상 항상 실패하므로 브루트포스로 뚫고 키를 직접 유도해야 하며, 발신자 이름은 NTUser 조인으로 붙인다 — 이 두 가지를 모르면 시작조차 못 하거나 전부 Unknown으로만 보인다. 조회가 느릴 때('카톡 조회가 느려', 'query가 오래 걸려')는 열쇠·DB 경로를 env에 두고 --db를 넘기는 절차를, '카톡 보내줘', '열린 채팅 창에 글 넣어줘', '사진 보내줘', '파일 보내줘'처럼 이미 열린 채팅 창으로 보낼 때는 kakao-send.py(기본 미리보기·실제 전송 --send·dry-run·DB 확인)를, 오픈채팅 답장이 어느 글에 달린 말인지 판정할 때는 threadId(scope 3)를 다룬다. 채팅 창 열기 같은 일반 UI 자동화는 다루지 않는다."
+description: "macOS kakaocli로 카카오톡 로컬 DB를 열어 대화를 검색·조회할 때 쓰는 인증과 조회 절차. '카톡 검색해줘', '톡방에서 찾아봐', '오픈채팅에서 ~ 관련 내용 찾아줘', '카카오톡 대화 읽어줘', '누가 그 말 했어?', '보낸 사람 이름도 보여줘', 'kakaocli 인증이 안 돼', 'auth 실패', 'User ID auto-detection failed', 'PRAGMA key failed' 같은 상황이면 이 스킬을 쓸 것. user ID 자동탐지는 사실상 항상 실패하므로 브루트포스로 뚫고 키를 직접 유도해야 하며, 발신자 이름은 NTUser 조인으로 붙인다 — 이 두 가지를 모르면 시작조차 못 하거나 전부 Unknown으로만 보인다. 조회가 느릴 때('카톡 조회가 느려', 'query가 오래 걸려')는 열쇠·DB 경로를 env에 두고 --db를 넘기는 절차를, '카톡 보내줘', '채팅 창에 글 넣어줘', '사진 보내줘', '사진 여러 장 묶어 보내줘', '파일 보내줘', '그 글에 답장해줘', '멘션 걸어줘', '카톡 창 열어줘', '닫힌 채팅방 열어줘'처럼 카톡 화면을 조작해 보낼 때는 kakao-send.py(닫힌 창 열기 --open, 답장 --reply-to, 진짜 멘션 --mention, 사진 여러 장 묶음, 기본 미리보기·실제 전송 --send·dry-run·DB 확인, 복제한 카톡 앱은 --bundle-id·--pid)를, 오픈채팅 답장이 어느 글에 달린 말인지 판정할 때는 threadId(scope 3)를 다룬다. 키보드·마우스를 쓰지 않고 macOS 손쉬운 사용으로만 조작한다."
 ---
 
 # kakaocli 인증
@@ -319,9 +319,9 @@ kakaocli query "<SQL>" --db "$KAKAO_DB_PATH" --key "$KAKAO_DB_KEY"
 
 ---
 
-## 8. 열린 채팅 창으로 보내기(글·사진·파일) — `scripts/kakao-send.py`
+## 8. 채팅 창으로 보내기(글·사진·파일·답장·멘션, 창 열기) — `scripts/kakao-send.py`
 
-사용자의 마우스·키보드를 쓰지 않고(System Events 접근성만) **이미 열린** 채팅 창으로 글·사진·파일을 보낸 뒤, DB에 내 메시지가 생겼는지로 성공을 판정한다. 사진·파일은 클립보드로 붙이므로 그동안 카톡이 몇 초 앞으로 온다(§8-1).
+사용자의 마우스·키보드를 쓰지 않고(System Events 접근성만) 채팅 창으로 글·사진·파일·답장·멘션을 보낸 뒤, DB에 내 메시지가 생겼는지로 성공을 판정한다. 창이 닫혀 있으면 `--open`으로 본창 목록에서 연다(§8-2). 사진·파일은 클립보드로 붙이므로 그동안 카톡이 몇 초 앞으로 온다(§8-1). 답장은 §8-3, 멘션은 §8-4, 복제한 카톡 앱 같은 다른 대상 앱은 §8-5.
 
 ```bash
 export KAKAO_ENV_FILE=~/.config/<이름>/secrets.env
@@ -331,6 +331,14 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file
 # 사진·파일: --photo / --attach (여러 번 쓸 수 있다, --file과 섞어도 된다 — 적은 순서대로, 같은 종류가 이어지면 한 번에 붙인다)
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --photo a.jpg --attach report.pdf --dry-run
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --photo a.jpg --attach report.pdf --me <USER_ID> --send
+# 사진 여러 장을 「사진 N장」 묶음 하나로
+python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --photo 1.jpg --photo 2.jpg --me <USER_ID> --send
+# 닫힌 창 열기(§8-2): 열기만, 또는 보내기 전에 닫혀 있으면 열기
+python3 scripts/kakao-send.py --window "<창 제목>" --open-only
+python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt --open --me <USER_ID> --send
+# 답장(§8-3)·멘션(§8-4): --file 하나와만
+python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file reply.txt --reply-to <원글 logId> --me <USER_ID> --send
+python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt --mention "<그 방에 보이는 이름>" --me <USER_ID> --dry-run
 ```
 
 `--file`은 **보낼 글이 든 텍스트 파일**이다. 파일 자체를 보내려면 `--attach`를 쓴다.
@@ -339,18 +347,26 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --phot
 |---|---|
 | `PREVIEW_ONLY` | `--send`도 `--dry-run`도 없어서 보낼 곳·글·파일만 찍었다(종료 코드 2). 카톡을 건드리지 않았다 |
 | `DRYRUN_OK` | 글은 넣은 값이 파일과 같았고 다시 비웠다. 사진·파일은 붙여 넣어 확인 시트 「N개 전송」까지 갔다가 취소했다. 보내지 않았다 |
-| `SENT_OK <KST>` | 모두 DB에서 내 메시지로 찾았다. 항목마다 `TEXT_OK`·`PHOTO_OK type=2 …`(여러 장 묶음은 type=27)·`ATTACH_OK type=18 …` 줄이 앞에 나온다 |
+| `SENT_OK <KST>` | 모두 DB에서 내 메시지로 찾았다. 항목마다 `TEXT_OK`·`PHOTO_OK type=2 …`(여러 장 묶음은 type=27)·`ATTACH_OK type=18 …`·`MENTION_OK …` 줄이 앞에 나온다 |
+| `REPLY_OK logId=… to=…` | 답장이 DB에서 원글에 이어졌다(`REPLY_LINK src_logId`=type 26, `REPLY_LINK threadId`=오픈채팅 scope 3) |
+| `OPEN_OK <제목> OPENED·ALREADY_OPEN` | `--open-only`로 창을 열었거나 이미 열려 있었다. 아무것도 보내지 않았다 |
+| `FAIL LEAKED <logId>` | 답장·멘션 dry-run이나 실패 뒤 DB에 내 새 글이 생겼다 — 보내면 안 되는 글이 나갔다. 그 방을 바로 확인한다 |
+| `FAIL REPLY_NOT_LINKED` | 글은 나갔지만 답장으로 이어지지 않고 보통 글로 갔다. 다시 보내지 마라 |
+| `FAIL WINDOW_OPEN_FAILED <이유>`·`AMBIGUOUS` | `--open`으로 창을 못 열었다. 같은 이름 줄이 여럿이면 `--open-hint`(§8-2) |
+| `FAIL MENTION_NOT_FOUND`·`MENTION_AMBIGUOUS`·`PICKER_NOT_SHOWN`·`WINDOW_NOT_MAIN` | 멘션 칩을 못 만들어 입력칸을 비우고 멈췄다(§8-4) |
+| `FAIL WRONG_APP`·`APP_COUNT` | `--pid`의 앱 번들 ID가 `--bundle-id`와 다르거나, 그 번들 ID 앱이 여럿 떠 있다(§8-5) |
 | `FAIL STAGE_CONFLICT` | `~/Downloads`에 같은 이름의 다른 파일이 있다. 덮지 않는다 — 파일 이름을 바꿔서 다시 |
 | `FAIL TYPE_MISMATCH` | 보내졌지만 기대한 종류가 아니다(예: `--photo`에 사진이 아닌 파일을 줘서 type 18로 갔다). 다시 보내지 마라 |
 | `FAIL NO_PASTE_MENU`·`NO_CONFIRM_SHEET`·`COUNT_MISMATCH` | 붙여넣기 메뉴·확인 시트 단계에서 멈췄거나 시트의 개수가 달랐다(취소함). 보내지 않았다 |
-| `FAIL WINDOW_NOT_OPEN` | 그 제목의 창이 없다 — 이 스크립트는 창을 열지 않는다 |
+| `FAIL WINDOW_NOT_OPEN` | 그 제목의 창이 없다 — `--open`을 주면 본창 목록에서 한 번 연다 |
 | `FAIL BOX_NOT_EMPTY` | 입력칸에 이미 글이 있다. 덮지도 지우지도 않는다 |
 | `FAIL VALUE_MISMATCH` | 넣은 값이 파일과 달라 입력칸을 비우고 멈췄다 |
 | `FAIL NOT_IN_DB` | 버튼은 눌렀는데 15초 안에 DB에 안 보인다 |
 
 - `kakao-send-ui.js`(JXA)는 창의 scrollArea 안 `textArea`(description `메시지 입력`)와 `button 전송`만 바로 짚는다(약 0.2초). **창 전체 접근성 트리를 훑지 마라** — 창 전체를 읽으면 25~30초, System Events로 목록 행을 훑으면 150초가 넘는다.
 - 카카오톡은 `AXPress`에 오류를 돌려줘도 실제로 보낸다. 그래서 성공은 DB(내 `authorId`, 누른 시각 이후, 앞 40자 일치)로만 판단한다. `NOT_IN_DB`가 나오면 **다시 보내기 전에 DB로 그 방을 먼저 확인한다**(중복 전송 방지).
-- 창 제목은 방 이름 그대로다(나와의 채팅은 내 이름 — DB에서는 `NTChatRoom.type=5`인 방). 창 여는 법(실측): 카톡 본창 「채팅」·「오픈채팅」 탭 → 목록에서 방을 더블클릭. 마우스 없이는 그 행의 셀에 `AXShowMenu` → 「채팅방 열기」 AXPress(카톡을 앞으로 띄우지 않는다). 행을 찾을 때는 `rows.uiElements[0].staticTexts.value()`로 한 번에 읽는다(600행에 약 50초). 검색칸에 값만 넣으면(setValue) 결과가 안 뜬다. 카카오톡을 재시작하면 열린 채팅 창이 모두 닫힌다.
+- 창 제목은 방 이름 그대로다(나와의 채팅은 내 이름 — DB에서는 `NTChatRoom.type=5`인 방). 닫힌 창은 `--open`·`--open-only`로 연다(§8-2). 카카오톡을 재시작하면 열린 채팅 창이 모두 닫힌다.
+- **보내는 UI 동작은 한 번에 하나만.** 같은 앱에 두 프로그램이 동시에 보내면 입력칸·클립보드·주 창이 섞인다. 여러 프로세스가 보낸다면 파일 잠금(flock) 하나로 줄 세운다.
 - **기본은 미리보기다** — 실제 전송은 `--send`가 있을 때만(남에게 닿는 스크립트는 기본이 미리보기). 처음 쓰는 방·창이면 `--dry-run`부터. 실제 전송은 사용자가 시킨 글만 한다.
 - 권한: 손쉬운 사용(osascript를 부르는 앱), 전체 디스크 접근(DB 확인).
 - `메시지 입력`·`전송`은 한국어 UI에서 확인한 이름이다. 다른 언어 UI면 `kakao-send-ui.js`의 두 문자열을 바꾼다.
@@ -364,6 +380,39 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --phot
 - 같은 종류(`--photo`끼리, `--attach`끼리)가 이어지면 한 번에 붙인다. 사진 여러 장은 「사진 N장」 묶음 하나(type 27)로 간다.
 - 예전 길 — 「파일전송 ⌘O」 열기 창에서 `~/Downloads` 목록으로 고르는 `kakao-attach-ui.js`는 카톡을 앞으로 띄우지 않지만, 행 선택이 가끔 안 먹고(`NOT_SELECTED`, 2026-10-24 실측) 한 번에 하나만 고를 수 있다. `kakao-send.py`는 더 이상 이 길을 쓰지 않는다(파일은 손으로 부를 수 있게 남겨 둔다).
 - `편집`·`붙여넣기`(또는 `Paste`)·`메시지 입력`·`취소`·`N개 전송`·`확인`은 한국어 UI에서 확인한 이름이다.
+
+### 8-2. 닫힌 창 열기 — `kakao-open-ui.js` (`--open`, `--open-only`)
+
+- 순서(실측): 메뉴 「창 → 채팅」 AXPress(본창을 채팅 탭으로) → 본창 목록에서 첫 글자칸이 창 제목과 같은 줄을 찾는다 → 그 줄 셀에 `AXShowMenu` → 「채팅방 열기」 AXPress → 그 제목의 창이 생겼는지 확인. 키·마우스·클립보드를 쓰지 않고 카톡을 앞으로 띄우지 않는다.
+- 목록 줄 글자는 `list.rows.uiElements[0].staticTexts.value()`로 **한 번에** 읽는다(줄마다 읽으면 수백 줄에 수십 초).
+- **화면 밖 줄에는 `AXShowMenu`가 아무 반응이 없다**(본창이 작으면 아래쪽 줄이 화면 밖이다). 세로 스크롤 막대 `value`(0=맨 위, 1=맨 아래)를 계산해 그 줄을 가운데로 옮긴 뒤 연다. 출력의 `scrolled: true`가 그 경우다.
+- **같은 이름 줄이 둘이면 `AMBIGUOUS`로 멈춘다.** 흔한 경우는 나와의 채팅 — 줄 이름이 내 이름이라 내 오픈프로필 줄과 겹친다. 줄의 배지 이미지 설명이 나와의 채팅은 `badge me`, 오픈채팅은 `badge openchat room`이라 `--open-hint "badge me"`로 고른다. 힌트는 줄 미리보기 글(줄 안 `textArea`)에도 맞춰 본다.
+- 오픈프로필로 온 1:1 대화는 본창 줄 이름이 내 오픈프로필 이름이고, 그 줄의 「채팅방 열기」는 대화 창이 아니라 제목 없는 「오픈프로필 대화 목록」 창을 연다. 진짜 대화 창 제목은 상대 이름이다. 이때는 `kakao-open-ui.js <상대 이름> open "" <내 오픈프로필 이름>`(4번째 인자 via)으로 목록 창을 거쳐 연다(이 판에서는 따로 시험하지 않았다).
+- **창을 열면 그 방의 안 읽은 글이 읽음 처리된다**(상대 화면의 숫자 1이 사라진다). 남의 1:1 방을 시험으로 열지 않는다.
+
+### 8-3. 답장 — `kakao-reply-ui.js` (`--reply-to <원글 logId>`)
+
+- 원글은 DB에서 내용·작성자를 읽어 화면 말풍선과 맞춘다. 대화 표의 말풍선(`AXTextArea`) 값이 원글과 **똑같은 것이 정확히 하나**일 때만 진행한다. 글자 글(type 1·26)만 되고, 같은 내용이 그 방에 둘 이상이면 `REPLY_TARGET_NOT_UNIQUE`로 멈춘다.
+- 말풍선 값도 `tb.rows.uiElements.textAreas.value()`로 한 번에 읽는다(줄마다 읽으면 130줄에 37초).
+- 표에 원글이 없으면 스크롤 막대 값을 0(맨 위)으로 옮겨 이전 기록을 더 불러온다(최대 5번). **`AXScrollUpByPage`는 이 표에서 아무 일도 안 한다.**
+- **표에는 화면 밖 말풍선도 들어 있는데, 화면 밖 말풍선에는 `AXShowMenu`가 메뉴를 안 띄운다.** 스크롤 막대 값 = (말풍선 위 − 표 위 + 말풍선 높이/2 − 영역 높이/2) / (표 높이 − 영역 높이)로 가운데로 옮긴 뒤 메뉴를 연다.
+- 말풍선 메뉴: 1:1·일반방은 「답장」, **오픈채팅은 「댓글」**만 있다. 누른 뒤 입력칸 위 인용이 원글 앞부분과 같고 머리글이 「<작성자>에게 답장」(내 글이면 「나에게 답장」)인지 다시 보고, 아니면 닫고 멈춘다. 답장 상태 입력칸 설명은 「답장 메시지 입력」, 답장 닫기 단추 설명은 「닫기」(창 닫기 단추는 「닫기 버튼」이라 정확히 비교한다).
+- 전송 직전에 답장 상태가 풀렸으면 보통 글로 나가므로 멈춘다. 판정은 DB로만: 새 글이 type 26 + `attachment.src_logId`=원글이거나 scope 3 + `threadId`=원글(§5 오픈채팅 스레드).
+
+### 8-4. 진짜 멘션 — `kakao-mention-ui.js` (`--mention <이름>`)
+
+- **붙여 넣은 「@이름」 글자는 멘션이 아니다.** 입력칸에서 「@」를 쳐서 뜨는 고르기 창에서 사람을 골라야 칩(입력칸 값에 U+FFFC 한 글자)이 생기고, DB `attachment.mentions`에 user_id가 들어간다.
+- 순서: 대상 창을 그 앱의 주 창(`AXMain`)으로 → 입력칸 초점 → Shift+2 키 이벤트를 **카톡 PID에만**(`CGEventPostToPid`, 창을 앞으로 올리지 않는다) → 고르기 창(입력칸 위 두 번째 표) → 이름을 `AXSelectedText`로 넣어 거른다(입력기를 거치지 않아 한글도 그대로) → 이름이 똑같은 줄이 정확히 하나일 때만 선택 → **Return 직전에 고르기 창을 새로 읽어** 그 줄이 여전히 하나이고 선택돼 있는지, 입력칸에 이름이 남았는지 다시 본다 → Return → 칩 수가 늘었는지 확인 → 글을 `AXSelectedText`로 이어 붙인다(값을 통째로 바꾸면 칩이 지워진다).
+- **PID로 보낸 키는 그 앱의 주 창으로 간다.** 입력칸 초점만 주고 키를 보내면 「@」가 다른 방 입력칸에 들어간다(2026-10-31 실측: 다른 창이 주 창일 때 그 창 입력칸에 「@」가 쌓였다). 그래서 키 전에 대상 창을 `AXMain`으로 만들고, 안 되면 `WINDOW_NOT_MAIN`으로 멈춘다.
+- Return 직전 재확인은 실제 사고에서 나왔다: 사람이 많은 방에서 「@이름」 글자만 그대로 나갔다. 고르기 창이 다시 걸러지는 사이 Return이 입력칸에 들어간 것으로 보인다. 출력의 `returned`(보낸 Return 수)가 0이 아닌데 실패했으면 `kakao-send.py`가 DB에서 내 새 글을 찾아 `FAIL LEAKED`로 알린다.
+- 1:1 방·나와의 채팅에는 고르기 창이 뜨지 않는다(`PICKER_NOT_SHOWN`). 이름은 그 방에 보이는 이름 그대로 쓴다.
+
+### 8-5. 다른 카톡 앱(복제본 등) — `--bundle-id`, `--pid`
+
+- 모든 UI 스크립트(`kakao-send-ui.js`·`kakao-clip-ui.js`·`kakao-open-ui.js`·`kakao-reply-ui.js`·`kakao-mention-ui.js`)는 환경변수 `KAKAO_BUNDLE_ID`(기본 `com.kakao.KakaoTalkMac`)·`KAKAO_PID`로 대상 앱을 고른다. `kakao-send.py`의 `--bundle-id`·`--pid`가 이 둘을 넘긴다. (예전 길 `kakao-attach-ui.js`는 기본 카카오톡만.)
+- `--pid`를 주면 그 PID 하나만 건드리고, 그 PID의 번들 ID가 `--bundle-id`(없으면 기본값)와 다르면 `WRONG_APP`으로 멈춘다. 같은 맥에서 두 카톡(본 계정·에이전트 계정)을 띄울 때 엉뚱한 계정으로 보내지 않게 하는 장치다. PID 없이 번들 ID로 찾을 때 그 앱이 둘 이상이면 `APP_COUNT`.
+- DB 확인은 그 앱 계정의 DB여야 한다 — `KAKAO_DB_KEY`·`KAKAO_DB_PATH`·`KAKAO_USER_ID`를 그 계정 값으로 준다(§7). 복제한 앱은 컨테이너 경로가 달라 DB 경로도 다르다.
+- 시험 전송은 그 계정의 나와의 채팅에만 한다(남에게 안 나간다). 다른 방은 `--dry-run`과 이미 열린 창까지만.
 
 ---
 
@@ -382,5 +431,8 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --phot
 - [ ] 큰 ID를 JS로 받는다면 `CAST(... AS TEXT)`로 받았는가, 보내는 중 임시 줄(`logId` INT64 최대)을 뺐는가(§5)
 - [ ] 보낼 때 창이 열려 있고 입력칸이 비었는가, 실제 전송에 `--send`를 붙였는가, 처음이면 `--dry-run`부터, 성공은 `SENT_OK`(DB 확인)로만 판단했는가(§8)
 - [ ] 사진·파일은 `--photo`·`--attach`로 보냈는가(`--file`은 글), 시험 전송은 나와의 채팅에만 했는가(§8-1)
+- [ ] 창을 열기 전에 그 방이 남의 1:1 방이 아닌지 봤는가(열면 읽음 처리된다), 같은 이름 줄은 `--open-hint`로 골랐는가(§8-2)
+- [ ] 답장은 `REPLY_OK`(DB 연결)로, 멘션은 `MENTION_OK`(DB mentions)로 판단했는가 — 「@이름」 글자를 붙여 넣지 않았는가(§8-3·8-4)
+- [ ] 카톡을 둘 띄웠다면 `--bundle-id`·`--pid`와 그 계정 DB 값을 맞췄는가(§8-5)
 - [ ] 이 기기 값(user ID·chatId·방 이름)을 SKILL.md가 아니라 `LOCAL.md`에 적었는가(§6)
 - [ ] 사진을 찾고 있다면 — 로컬/Cache.db 말고 `scripts/extract-photos.py`(NTChatMessage type=2·27)로 받았는가. 4일 지난 건 410이라 사용자 캡처로 넘겼는가(§5)
