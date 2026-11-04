@@ -18,7 +18,9 @@
   --attach    : 보낼 파일(여러 번 쓸 수 있다). DB에서 type 18(파일)로 확인한다.
                 글·사진·파일은 적은 순서대로 보낸다. 같은 종류가 이어지면 한 번에 붙인다 — 사진 여러 장은 「사진 N장」 묶음(type 27).
   --reply-to  : 그 logId 글에 「답장」(1:1·일반방) 또는 「댓글」(오픈채팅)으로 --file 글을 보낸다(kakao-reply-ui.js).
-                원글은 DB에서 내용·작성자를 읽어 화면 말풍선과 맞춘다 — 글자 글만, 같은 내용이 그 방에 둘 이상이면 멈춘다.
+                원글은 DB에서 내용·작성자를 읽어 화면 말풍선과 맞춘다 — 글자 글과 사진·동영상·파일.
+                표에 없으면 돋보기(대화 내 검색)로 그 글(또는 그 방에 하나뿐인 옆 글)을 찾아 그 근처를 불러온다.
+                같은 내용 글이 둘 이상이거나 사진·파일이면 DB 앞뒤 글 5개씩을 표의 앞뒤 말풍선과 맞춰 자리를 정한다(하나로 안 정해지면 멈춤).
                 판정: 새 글이 type 26 + attachment.src_logId=원글, 또는 scope 3 + threadId=원글이면 REPLY_OK.
                 원글이 오픈채팅 스레드 댓글(scope 3)이면 새 글이 그 스레드 뿌리 threadId로 들어가도 REPLY_OK로 본다.
                 보통 글로 나갔으면 FAIL REPLY_NOT_LINKED(다시 보내지 않는다).
@@ -444,27 +446,85 @@ def send_mention(a: argparse.Namespace, text: str, key: str, me: int) -> tuple[b
         os.unlink(path)
 
 
+# 답장할 수 있는 사진·동영상·파일 type → 답장 인용에 보일 말(파일은 「파일: <이름>」). 표에서는 「공유」 단추가 있고 글칸이 없는 말풍선이다
+MEDIA_TYPES = {2: '사진', 27: '사진', 3: '동영상', 18: '파일'}
+CTX_N = 5  # 앞뒤로 맞출 글 수(kakao-reply-ui.js K와 같다)
+
+
+def sig_of(typ: int, message: str) -> str | None:
+    """표 한 줄이 어떻게 보일지: 'T:<글>' 또는 'M'(사진·동영상·파일). 그 밖의 글(입장·이모티콘·지운 글 등)은 뺀다."""
+    if typ in (1, 26) and message.strip():
+        return 'T:' + message
+    if typ in MEDIA_TYPES:
+        return 'M'
+    return None
+
+
+def context(a: argparse.Namespace, key: str, older: bool) -> list[tuple[int, int, str, str]]:
+    op, order = ('<', 'DESC') if older else ('>', 'ASC')
+    out: list[tuple[int, int, str, str]] = []
+    for lid, typ, msg in kakao_db.q(key, f"SELECT logId, type, coalesce(message,'') FROM NTChatMessage WHERE chatId={a.chat_id} "
+                                         f"AND logId{op}{a.reply_to} AND logId<9223372036854775807 ORDER BY logId {order} LIMIT 60"):
+        s = sig_of(int(typ), str(msg))
+        if s:
+            out.append((int(lid), int(typ), str(msg), s))
+    return out
+
+
+def search_query(a: argparse.Namespace, key: str, message: str) -> str | None:
+    """돋보기 검색어: 첫 줄 앞 30자. 그 방 DB에서 이 말이 들어간 글이 하나뿐일 때만 쓴다(검색은 가장 최근 것으로 간다).
+    답장 글의 인용(attachment)도 검색에 걸린다 — 그 글에 답장이 달린 뒤에는 검색이 답장 쪽(최신)으로 간다. 그래서 attachment도 센다."""
+    first = next((ln.strip() for ln in message.splitlines() if ln.strip()), '')[:30].strip()
+    if len(first) < 2:
+        return None
+    n = int(kakao_db.q(key, f"SELECT count(*) FROM NTChatMessage WHERE chatId={a.chat_id} "
+                            f"AND (instr(coalesce(message,''), {sql_str(first)})>0 "
+                            f"OR instr(coalesce(attachment,''), {sql_str(first)})>0)")[0][0])
+    return first if n == 1 else None
+
+
 def reply_target(a: argparse.Namespace, key: str, me: int) -> dict[str, object]:
-    rows = kakao_db.q(key, f"SELECT authorId, type, coalesce(message,''), sentAt, coalesce(scope,0), coalesce(threadId,0) "
-                           f"FROM NTChatMessage WHERE chatId={a.chat_id} AND logId={a.reply_to}")
+    rows = kakao_db.q(key, f"SELECT authorId, type, coalesce(message,''), sentAt, coalesce(scope,0), coalesce(threadId,0), "
+                           f"coalesce(attachment,'') FROM NTChatMessage WHERE chatId={a.chat_id} AND logId={a.reply_to}")
     if not rows:
         raise RuntimeError(f'REPLY_TARGET_NOT_FOUND {a.reply_to}')
     author, typ, message, sent_at = int(rows[0][0]), int(rows[0][1]), str(rows[0][2]), int(rows[0][3])
     # 원글이 이미 스레드 댓글(scope 3)이면 그 글에 단 댓글은 같은 스레드(뿌리 threadId)로 들어갈 수 있다
     thread_root = int(rows[0][5] or 0) if int(rows[0][4] or 0) == 3 else 0
-    if typ not in (1, 26) or not message.strip():
-        raise RuntimeError(f'REPLY_TARGET_NOT_TEXT type={typ} (글자 글만 답장할 수 있다 — 지운 글은 type에 16384가 더해진다)')
-    same = int(kakao_db.q(key, f"SELECT count(*) FROM NTChatMessage WHERE chatId={a.chat_id} "
-                               f"AND message={sql_str(message)}")[0][0])
-    if same > 1:
-        raise RuntimeError(f'REPLY_TARGET_NOT_UNIQUE 같은 내용 {same}개')
+    media = typ in MEDIA_TYPES
+    if not media and (typ not in (1, 26) or not message.strip()):
+        raise RuntimeError(f'REPLY_TARGET_NOT_TEXT type={typ} (글·사진·동영상·파일만 답장할 수 있다 — 지운 글은 type에 16384가 더해진다)')
+    same = 1 if media else int(kakao_db.q(key, f"SELECT count(*) FROM NTChatMessage WHERE chatId={a.chat_id} "
+                                               f"AND message={sql_str(message)}")[0][0])
+    older, newer = context(a, key, True), context(a, key, False)
+    # 돋보기 검색어: 원글이 그 방에 하나뿐인 글이면 원글, 아니면(같은 내용·사진·파일) 가장 가까운 옆 글 중 하나뿐인 글(앞뒤 8개까지)
+    query, anchor = (search_query(a, key, message), a.reply_to) if not media and same == 1 else (None, 0)
+    if not query:
+        near = [x for pair in zip(older[:8], newer[:8]) for x in pair] + older[len(newer[:8]):8] + newer[len(older[:8]):8]
+        for lid, ntyp, msg, _s in near:
+            if ntyp in (1, 26):
+                query = search_query(a, key, msg)
+                if query:
+                    anchor = lid
+                    break
+    quotes: list[str] = []
+    if media:
+        quotes.append(MEDIA_TYPES[typ])
+        try:
+            fname = str(json.loads(str(rows[0][6] or '{}')).get('name') or '')
+        except (json.JSONDecodeError, AttributeError):
+            fname = ''
+        if fname:
+            quotes.append(fname)
     # 오픈채팅은 방(linkId)마다 이름이 다르다 — 그 방 linkId의 이름을 먼저, 없으면 아무 행이나
     link = kakao_db.q(key, f"SELECT coalesce(linkId,0) FROM NTChatRoom WHERE chatId={a.chat_id}")
     link_id = int(link[0][0]) if link else 0
     nm = kakao_db.q(key, f"SELECT COALESCE(NULLIF(nickName,''), NULLIF(displayName,''), NULLIF(friendNickName,''), '') "
                          f"FROM NTUser WHERE userId={author} ORDER BY (linkId={link_id}) DESC LIMIT 1")
-    return {'text': message, 'author': nm[0][0] if nm else '', 'self': author == me, 'sentAt': kst(sent_at),
-            'threadRoot': thread_root}
+    return {'text': '' if media else message, 'author': nm[0][0] if nm else '', 'self': author == me, 'sentAt': kst(sent_at),
+            'threadRoot': thread_root, 'kind': 'media' if media else 'text', 'type': typ, 'dup': same > 1, 'same': same,
+            'before': [s for *_x, s in older[:CTX_N]], 'after': [s for *_x, s in newer[:CTX_N]],
+            'search': query, 'anchor': anchor, 'quotes': quotes}
 
 
 def reply_ui(a: argparse.Namespace, mode: str, target_path: str, msg_path: str | None = None) -> dict[str, object]:
@@ -519,9 +579,10 @@ def send_reply(a: argparse.Namespace, text: str, key: str, me: int) -> tuple[boo
         if not a.reply_fallback:
             return False, [f'FAIL {e}']
         return reply_fallback(a, text, key, me, str(e).split()[0], [f'FAIL_REPLY {e}'])
-    lines.append(f"TARGET logId={a.reply_to} self={target['self']} at={target['sentAt']} {str(target['text'])[:40]!r}")
+    lines.append(f"TARGET logId={a.reply_to} self={target['self']} at={target['sentAt']} kind={target['kind']} type={target['type']} "
+                 f"same={target['same']} search={target['search']!r} anchor={target['anchor']} {str(target['text'])[:40]!r}")
     with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8') as f:
-        json.dump({k: target[k] for k in ('text', 'author', 'self')}, f, ensure_ascii=False)
+        json.dump({k: target[k] for k in ('text', 'author', 'self', 'kind', 'dup', 'before', 'after', 'search', 'quotes')}, f, ensure_ascii=False)
         tpath = f.name
     with tempfile.NamedTemporaryFile('w', suffix='.txt', delete=False, encoding='utf-8') as f:
         f.write(text)
@@ -535,6 +596,8 @@ def send_reply(a: argparse.Namespace, text: str, key: str, me: int) -> tuple[boo
             if res.get('ok'):
                 res = mention_ui(a, mpath, mode)
                 lines.append(json.dumps(res, ensure_ascii=False))
+                if res.get('ok') and not a.dry_run:  # 돋보기로 옛 글 묶음을 불렀으면 최신 글로 돌려놓는다
+                    lines.append(json.dumps(reply_ui(a, 'restore', tpath), ensure_ascii=False))
         else:
             res = with_window(a, lambda: reply_ui(a, mode, tpath, mpath), lines)
             lines.append(json.dumps(res, ensure_ascii=False))
