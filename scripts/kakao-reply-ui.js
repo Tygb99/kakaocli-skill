@@ -50,6 +50,8 @@ function run(argv) {
   }
   const norm = (s) => String(s === null || s === undefined ? '' : s).replace(/\r\n?/g, '\n');
   const flat = (s) => norm(s).replace(/\s+/g, ' ').trim();
+  // 시험용: 환경변수 KAKAO_FAULT=partial 이면 글을 넣은 뒤 일부러 앞 14자만 남겨 「넣는 도중 실패」를 만든다(뒷정리 시험용)
+  const fault = () => { try { const v = $.NSProcessInfo.processInfo.environment.objectForKey('KAKAO_FAULT'); return v.isNil() ? '' : ObjC.unwrap(v); } catch (e) { return ''; } };
 
   const se = Application('System Events');
   let p;
@@ -69,6 +71,18 @@ function run(argv) {
     return null;
   };
   const closeBtn = () => { try { return w.buttons().find((b) => { try { return b.description() === '닫기'; } catch (e) { return false; } }) || null; } catch (e) { return null; } };
+  // 값 지우기가 한 번에 안 먹을 때가 있다(다음 보내기가 BOX_NOT_EMPTY로 막힘) — 지운 뒤 다시 읽어 0자가 될 때까지 최대 4번
+  const wipe = (b) => {
+    if (!b) return null;
+    for (let i = 0; i < 4; i++) {
+      let cur = '';
+      try { cur = norm(b.el.value()); } catch (e) { return null; }
+      if (!cur.length) return 0;
+      try { b.el.value = ''; } catch (e) {}
+      delay(0.4);
+    }
+    try { return norm(b.el.value()).length; } catch (e) { return null; }
+  };
   const closeReply = () => {
     const r = { hadPanel: !!header() };
     const b = box();
@@ -76,7 +90,7 @@ function run(argv) {
       try { r.boxEmpty = b ? norm(b.el.value()) === '' : null; } catch (e) { r.boxEmpty = null; }
       return r;
     }
-    try { if (b && norm(b.el.value()).length) b.el.value = ''; } catch (e) {}
+    r.wipeLeft = wipe(b);
     const c = closeBtn();
     if (!c) { r.closed = false; r.err = 'NO_CLOSE_BUTTON'; return r; }
     try { c.actions.byName('AXPress').perform(); } catch (e) {}
@@ -84,14 +98,19 @@ function run(argv) {
     r.closed = !header();
     const b2 = box();
     r.boxDesc = b2 ? b2.desc : null;
+    if (b2) wipe(b2);
     try { r.boxEmpty = b2 ? norm(b2.el.value()) === '' : null; } catch (e) { r.boxEmpty = null; }
+    try { r.boxLen = b2 ? norm(b2.el.value()).length : null; } catch (e) { r.boxLen = null; }
     return r;
   };
+  // 원글 찾느라 올린 화면을 맨 아래로 돌려놓는다 — 위로 올라간 채 두면 다음 답장 때 최신 글이 표에 없다
+  const toBottom = () => { try { const sb = w.scrollAreas()[0].scrollBars()[0]; if (sb.value() < 0.999) { sb.value = 1; delay(0.5); return true; } } catch (e) {} return false; };
   const failClose = (o) => { out.cleanup = closeReply(); return done(o); };
 
   try {
     if (mode === 'close') {
       const r = closeReply();
+      r.scrolledToBottom = toBottom();
       return done({ ok: (!r.hadPanel || r.closed) && r.boxEmpty === true, step: r.hadPanel ? 'CLOSED' : 'NO_PANEL', cleanup: r });
     }
     // 이미 답장 상태면 사용자가 연 것일 수 있어 건드리지 않는다
@@ -118,6 +137,17 @@ function run(argv) {
     };
     const sb = (() => { try { return sa0.scrollBars()[0]; } catch (e) { return null; } })();
     let s = scan();
+    // 창이 위로 올라가 있으면 표에 최신 글이 없다 — 맨 위로 가기 전에 먼저 맨 아래로 내려 다시 본다(바쁜 방의 몇 분 전 글)
+    if (!s.hits.length && sb) {
+      let v = 1;
+      try { v = sb.value(); } catch (e) {}
+      if (v < 0.999 || s.rows < 5) {
+        try { sb.value = 1; } catch (e) {}
+        delay(1);
+        s = scan();
+        out.bottomFirst = true;
+      }
+    }
     let pages = 0;
     while (!s.hits.length && sb && pages < 5) {
       // 스크롤 막대 값 0 = 맨 위. 맨 위로 가면 카톡이 이전 기록을 더 불러온다
@@ -134,14 +164,23 @@ function run(argv) {
     const bubble = tb.rows[ri].uiElements[ci].textAreas[ti];
     const [saY, saH] = [sa0.position()[1], sa0.size()[1]];
     const visible = () => { const y = bubble.position()[1]; const h = bubble.size()[1]; const cy = y + h / 2; return (cy >= saY && cy <= saY + saH) || (y <= saY && y + h >= saY + saH); };
+    // 표가 커지면(수백~천 줄) 막대 값과 표 높이가 비례하지 않아 위 계산이 계속 빗나간다.
+    // 첫 번째는 위 계산으로 옮기고, 그다음부터는 방금 움직인 거리(표 y 변화 ÷ 막대 값 변화)로 남은 거리를 나눠 다시 옮긴다(최대 8번).
     let moves = 0;
+    let pxPerUnit = null;
     while (!visible()) {
-      if (!sb || moves >= 4) return done({ step: 'TARGET_NOT_VISIBLE', moves });
+      if (!sb || moves >= 8) return done({ step: 'TARGET_NOT_VISIBLE', moves });
       const ty = tb.position()[1]; const th = tb.size()[1];
-      const off = (bubble.position()[1] - ty) + bubble.size()[1] / 2 - saH / 2;
-      try { sb.value = Math.max(0, Math.min(1, off / Math.max(1, th - saH))); } catch (e) { return done({ step: 'SCROLL_FAILED', err: String(e).slice(0, 120) }); }
+      const cur = sb.value();
+      const need = (saY + saH / 2) - (bubble.position()[1] + bubble.size()[1] / 2);
+      const next = pxPerUnit === null
+        ? ((bubble.position()[1] - ty) + bubble.size()[1] / 2 - saH / 2) / Math.max(1, th - saH)
+        : cur + need / pxPerUnit;
+      try { sb.value = Math.max(0, Math.min(1, next)); } catch (e) { return done({ step: 'SCROLL_FAILED', err: String(e).slice(0, 120) }); }
       moves++;
-      delay(0.4);
+      delay(0.5);
+      const dv = sb.value() - cur; const dy = tb.position()[1] - ty;
+      if (Math.abs(dv) > 1e-6 && dy !== 0) pxPerUnit = dy / dv;
     }
     out.moves = moves;
     if (norm(bubble.value()) !== want) return done({ step: 'TARGET_MOVED' });
@@ -170,8 +209,10 @@ function run(argv) {
     try { quotes = w.textAreas.value().map(norm); } catch (e) {}
     out.quote = (quotes[0] || '').slice(0, 60);
     const fw = flat(want);
-    // 인용은 첫 줄만 보이고 「…」로 잘릴 수 있다 — 앞 10자 이상이 원글 앞부분과 같으면 같은 글로 본다
-    const quoteOk = quotes.some((q) => { const fq = flat(q).replace(/(…|\.\.\.)$/, '').trim(); return fq === fw || (fq.length >= Math.min(10, fw.length) && fw.startsWith(fq)); });
+    const fl = flat(want.split('\n')[0]);
+    // 인용은 첫 줄만 보이고 「…」로 잘릴 수 있다 — 앞 10자 이상이 원글 앞부분과 같거나, 인용이 원글 첫 줄 전체와 같으면 같은 글로 본다
+    // (첫 줄이 10자보다 짧은 여러 줄 글은 앞 10자 규칙만으로는 늘 틀렸다)
+    const quoteOk = quotes.some((q) => { const fq = flat(q).replace(/(…|\.\.\.)$/, '').trim(); return fq === fw || (fq.length >= Math.min(10, fw.length) && fw.startsWith(fq)) || (fq.length > 0 && fq === fl); });
     if (!quoteOk) return failClose({ step: 'REPLY_TARGET_MISMATCH', why: 'quote' });
     const author = String(target.author || '');
     const headerOk = h === author + '에게 ' + kind || (target.self === true && h === '나에게 ' + kind);
@@ -183,8 +224,9 @@ function run(argv) {
     if (mode === 'open') return done({ ok: true, step: 'REPLY_OPEN' });
 
     b.el.value = msg;
-    delay(0.5);
-    const got = norm(b.el.value());
+    if (fault() === 'partial') { delay(0.3); b.el.value = msg.slice(0, 14); }
+    let got = '';
+    for (let i = 0; i < 4; i++) { delay(0.5); got = norm(b.el.value()); if (got === norm(msg)) break; }
     if (got !== norm(msg)) return failClose({ step: 'VALUE_MISMATCH', want: msg.length, got: got.length });
     if (mode === 'set') return done({ ok: true, step: 'SET_ONLY', len: msg.length });
 

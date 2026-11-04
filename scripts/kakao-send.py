@@ -2,7 +2,7 @@
 """카카오톡 채팅 창에 글·사진·파일·답장·멘션을 보내고, kakaocli DB에서 내 메시지로 전송을 확인한다.
 
 사용: kakao-send.py --window <창 제목> --chat-id <CHAT_ID> [--file <글.txt>] [--photo <사진>]... [--attach <파일>]...
-                    [--reply-to <원글 logId>] [--mention <이름>]... [--open] [--open-hint <말>]
+                    [--reply-to <원글 logId> [--reply-fallback]] [--mention <이름>]... [--open] [--open-hint <말>]
                     [--bundle-id <번들 ID>] [--pid <PID>] [--me <내 USER_ID>] (--send | --dry-run)
       kakao-send.py --window <창 제목> --open-only [--open-hint <말>] [--bundle-id …] [--pid …]
   --send      : 실제로 보낸다. --send도 --dry-run도 없으면 미리보기만 한다(보낼 곳·글·파일을 찍고 종료 코드 2, 카톡을 건드리지 않음).
@@ -20,7 +20,11 @@
   --reply-to  : 그 logId 글에 「답장」(1:1·일반방) 또는 「댓글」(오픈채팅)으로 --file 글을 보낸다(kakao-reply-ui.js).
                 원글은 DB에서 내용·작성자를 읽어 화면 말풍선과 맞춘다 — 글자 글만, 같은 내용이 그 방에 둘 이상이면 멈춘다.
                 판정: 새 글이 type 26 + attachment.src_logId=원글, 또는 scope 3 + threadId=원글이면 REPLY_OK.
+                원글이 오픈채팅 스레드 댓글(scope 3)이면 새 글이 그 스레드 뿌리 threadId로 들어가도 REPLY_OK로 본다.
                 보통 글로 나갔으면 FAIL REPLY_NOT_LINKED(다시 보내지 않는다).
+  --reply-fallback : 답장을 못 붙이면(원글이 화면에 없음·인용 불일치·메뉴 없음 등) 답장을 닫고 입력칸 0자·내 새 글 0개를
+                확인한 뒤 같은 글을 답장 없이 보낸다. REPLY_FALLBACK <이유> 줄이 찍히고 끝 줄은 「SENT_OK … REPLY_FALLBACK=<이유>」.
+                없으면 예전처럼 FAIL로 멈춘다.
   --mention   : --file 글 맨 앞에 진짜 멘션을 붙인다(여러 번 쓸 수 있다, kakao-mention-ui.js). 이름은 그 방에 보이는 이름 그대로.
                 같은 이름이 둘 이상이거나 없으면 FAIL MENTION_AMBIGUOUS·MENTION_NOT_FOUND. 전송 뒤 DB attachment.mentions를 본다.
                 --reply-to와 같이 쓰면 답장 열기 → 멘션 칩 → 글 순서.
@@ -33,6 +37,9 @@
 끝나면 쓰던 앱과 원래 클립보드를 되돌린다. 붙여넣기는 ~/Downloads 아래 파일만 받으므로 다른 곳의 파일은
 ~/Downloads에 같은 이름으로 잠깐 복사하고 끝나면 지운다. 같은 이름의 다른 파일이 있으면 덮지 않고 멈춘다(STAGE_CONFLICT).
 열쇠·DB 경로는 kakao_db.py와 같은 규칙(KAKAO_DB_KEY·KAKAO_DB_PATH·KAKAO_ENV_FILE)으로 읽는다.
+글은 보낸 뒤 DB에 남은 글 전체를 파일과 글자 대조해 CONTENT SAME을 찍는다(다르면 FAIL CONTENT_MISMATCH). 파일이 낡은 글이면
+낡은 글이 SAME으로 나간다 — 보낼 글은 보내기 직전에 새로 쓰고 미리보기 출력으로 확인한다.
+창 이름이 --chat-id 방과 달라 다른 방으로 나갔으면 FAIL WRONG_ROOM chat=<실제 방>(다시 보내지 않는다).
 끝 줄: SENT_OK <KST> | REPLY_OK logId=… to=… | DRYRUN_OK | OPEN_OK … | PREVIEW_ONLY | FAIL <단계>   (종료 코드 0이면 성공)
 권한: 손쉬운 사용(System Events), 전체 디스크 접근(DB 확인).
 """
@@ -56,6 +63,13 @@ import kakao_db  # noqa: E402
 DOWNLOADS = os.path.expanduser('~/Downloads')
 TYPES = {'photo': (2, 27), 'attach': (18,)}
 PENDING = 9223372036854775807  # 보내는 중인 글의 임시 logId(INT64 최대) — 확인할 때 뺀다
+# 넣기가 실패한 뒤 입력칸에 우리 글이 남을 수 있고, 실제로는 나갔을 수도 있는 단계 — 지우고 입력칸 0자를 확인한 뒤 DB를 본다
+DIRTY_STEPS = ('VALUE_MISMATCH', 'LOST_AFTER_SET', 'AX_ERROR', 'UI_ERROR', 'NO_SEND_BUTTON', 'UI_TIMEOUT')
+
+
+def same_text(got: object, want: str) -> bool:
+    n = lambda s: str(s).replace('\r\n', '\n').replace('\r', '\n').strip()  # noqa: E731
+    return n(got) == n(want)
 
 
 def osa(script: str, *args: str, timeout: int = 90) -> dict[str, object]:
@@ -140,6 +154,8 @@ def main() -> int:
     ap.add_argument('--photo', dest='items', action='append', type=lambda s: ('photo', s), help='보낼 사진')
     ap.add_argument('--attach', dest='items', action='append', type=lambda s: ('attach', s), help='보낼 파일')
     ap.add_argument('--reply-to', type=int, metavar='logId', help='이 글에 답장으로 보낸다(--file 하나와만)')
+    ap.add_argument('--reply-fallback', action='store_true',
+                    help='답장을 못 붙이면 입력칸을 비운 뒤 답장 없이 보통 글로 보낸다(없으면 FAIL로 멈춤)')
     ap.add_argument('--mention', action='append', default=[], metavar='이름', help='글 맨 앞에 진짜 멘션(여러 번)')
     ap.add_argument('--open', action='store_true', help='창이 닫혀 있으면 본창 목록에서 연다')
     ap.add_argument('--open-only', action='store_true', help='창만 열고 보내지 않는다')
@@ -174,6 +190,8 @@ def main() -> int:
     special = bool(a.reply_to or a.mention)
     if special and (len(a.items) != 1 or a.items[0][0] != 'text'):
         ap.error('--reply-to·--mention은 --file 하나와만 쓴다')
+    if a.reply_fallback and not a.reply_to:
+        ap.error('--reply-fallback은 --reply-to와 같이 쓴다')
     for _, p in a.items:
         if not os.path.isfile(p):
             print(f'FAIL NO_SUCH_FILE {p}')
@@ -236,20 +254,40 @@ def send_text(a: argparse.Namespace, _kind: str, p: str, key: str, me: int) -> t
         return 0, ''
 
     start = int(time.time()) - 2
+    before = max_log(a, key)
     res = with_window(a, lambda: ui(a.window, path, 'send'), lines)
     print('\n'.join(lines + [json.dumps(res, ensure_ascii=False)]))
     if not res.get('ok'):
+        if res.get('step') not in DIRTY_STEPS:
+            print(f"FAIL {res.get('step')}")
+            return 1, ''
+        # 넣다 만 글이 입력칸에 남아 다음 보내기를 막지 않게 비운다(우리 글일 때만). UI 오류여도 실제로 나갔을 수 있어 DB도 본다.
+        print(json.dumps(ui(a.window, path, 'clear'), ensure_ascii=False))
+    head = msg[:40]
+    for _ in range(15 if res.get('ok') else 6):
+        rows = kakao_db.q(key, f"SELECT logId, sentAt, coalesce(message,'') FROM NTChatMessage WHERE chatId={a.chat_id} "
+                               f"AND authorId={me} AND sentAt>={start} AND logId>{before} AND logId<{PENDING} "
+                               f"AND substr(message,1,{len(head)})={sql_str(head)} ORDER BY logId DESC LIMIT 1")
+        if rows:
+            log_id, sent_at, message = rows[0]
+            print('TEXT_OK', kst(sent_at), f'logId={log_id}')
+            # 나갔다는 것만으로는 내용을 보증하지 않는다 — DB 글 전체를 파일과 대조한다
+            if not same_text(message, msg):
+                print(f'FAIL CONTENT_MISMATCH 글은 나갔다(logId {log_id}) — DB {len(str(message))}자, 파일 {len(msg)}자. 다시 보내지 마라')
+                return 1, ''
+            print('CONTENT SAME')
+            return 0, kst(sent_at)
+        time.sleep(1)
+    if not res.get('ok'):
         print(f"FAIL {res.get('step')}")
         return 1, ''
-    head = msg[:40]
-    for _ in range(15):
-        rows = kakao_db.q(key, f"SELECT sentAt FROM NTChatMessage WHERE chatId={a.chat_id} AND authorId={me} "
-                               f"AND sentAt>={start} AND logId<{PENDING} AND substr(message,1,{len(head)})={sql_str(head)} "
-                               f"ORDER BY sentAt DESC LIMIT 1")
-        if rows:
-            print('TEXT_OK', kst(rows[0][0]))
-            return 0, kst(rows[0][0])
-        time.sleep(1)
+    # 창 이름이 --chat-id 방과 달라 다른 방으로 나갔는지 본다(같은 이름 창·나와의 채팅 혼동)
+    other = kakao_db.q(key, f"SELECT chatId, logId FROM NTChatMessage WHERE authorId={me} AND sentAt>={start} "
+                            f"AND chatId<>{a.chat_id} AND logId<{PENDING} AND substr(message,1,{len(head)})={sql_str(head)} "
+                            f"ORDER BY logId DESC LIMIT 1")
+    if other:
+        print(f'FAIL WRONG_ROOM chat={other[0][0]} logId={other[0][1]} — 창 「{a.window}」은 chat {a.chat_id}가 아니다. 다시 보내지 마라')
+        return 1, ''
     print('FAIL NOT_IN_DB', 'box_after', res.get('boxAfter'))
     return 1, ''
 
@@ -392,6 +430,11 @@ def send_mention(a: argparse.Namespace, text: str, key: str, me: int) -> tuple[b
                 if not mention_lines(att, len(a.mention), lines, log_id):
                     return False, lines
                 lines.append(f'TEXT logId={log_id} {str(message)[:80]!r}')
+                # 멘션 글은 맨 앞에 멘션이 붙는다 — 끝이 파일 글과 같은지 본다
+                if not str(message).replace('\r\n', '\n').strip().endswith(text.replace('\r\n', '\n').strip()):
+                    lines.append(f'FAIL CONTENT_MISMATCH 글은 나갔다(logId {log_id}) — DB 글 끝이 파일과 다르다. 다시 보내지 마라')
+                    return False, lines
+                lines.append('CONTENT SAME')
                 lines.append('SENT_OK ' + kst(sent_at))
                 return True, lines
             time.sleep(1)
@@ -402,11 +445,13 @@ def send_mention(a: argparse.Namespace, text: str, key: str, me: int) -> tuple[b
 
 
 def reply_target(a: argparse.Namespace, key: str, me: int) -> dict[str, object]:
-    rows = kakao_db.q(key, f"SELECT authorId, type, coalesce(message,''), sentAt FROM NTChatMessage "
-                           f"WHERE chatId={a.chat_id} AND logId={a.reply_to}")
+    rows = kakao_db.q(key, f"SELECT authorId, type, coalesce(message,''), sentAt, coalesce(scope,0), coalesce(threadId,0) "
+                           f"FROM NTChatMessage WHERE chatId={a.chat_id} AND logId={a.reply_to}")
     if not rows:
         raise RuntimeError(f'REPLY_TARGET_NOT_FOUND {a.reply_to}')
     author, typ, message, sent_at = int(rows[0][0]), int(rows[0][1]), str(rows[0][2]), int(rows[0][3])
+    # 원글이 이미 스레드 댓글(scope 3)이면 그 글에 단 댓글은 같은 스레드(뿌리 threadId)로 들어갈 수 있다
+    thread_root = int(rows[0][5] or 0) if int(rows[0][4] or 0) == 3 else 0
     if typ not in (1, 26) or not message.strip():
         raise RuntimeError(f'REPLY_TARGET_NOT_TEXT type={typ} (글자 글만 답장할 수 있다 — 지운 글은 type에 16384가 더해진다)')
     same = int(kakao_db.q(key, f"SELECT count(*) FROM NTChatMessage WHERE chatId={a.chat_id} "
@@ -418,17 +463,20 @@ def reply_target(a: argparse.Namespace, key: str, me: int) -> dict[str, object]:
     link_id = int(link[0][0]) if link else 0
     nm = kakao_db.q(key, f"SELECT COALESCE(NULLIF(nickName,''), NULLIF(displayName,''), NULLIF(friendNickName,''), '') "
                          f"FROM NTUser WHERE userId={author} ORDER BY (linkId={link_id}) DESC LIMIT 1")
-    return {'text': message, 'author': nm[0][0] if nm else '', 'self': author == me, 'sentAt': kst(sent_at)}
+    return {'text': message, 'author': nm[0][0] if nm else '', 'self': author == me, 'sentAt': kst(sent_at),
+            'threadRoot': thread_root}
 
 
 def reply_ui(a: argparse.Namespace, mode: str, target_path: str, msg_path: str | None = None) -> dict[str, object]:
     return osa('kakao-reply-ui.js', a.window, mode, target_path, *([msg_path] if msg_path else []), timeout=240)
 
 
-def reply_link(row: list[Any], log_id: int) -> str | None:
+def reply_link(row: list[Any], log_id: int, thread_root: int = 0) -> str | None:
     _lid, _typ, scope, thread, att = row[:5]
     if int(scope or 0) == 3 and int(thread or 0) == int(log_id):
         return 'threadId'
+    if thread_root and int(scope or 0) == 3 and int(thread or 0) == int(thread_root):
+        return 'threadId(root)'
     try:
         if int(json.loads(str(att)).get('src_logId') or 0) == int(log_id):
             return 'src_logId'
@@ -437,12 +485,40 @@ def reply_link(row: list[Any], log_id: int) -> str | None:
     return None
 
 
+def reply_fallback(a: argparse.Namespace, text: str, key: str, me: int, why: str,
+                   lines: list[str]) -> tuple[bool, list[str]]:
+    """--reply-fallback: 답장을 못 붙였고 입력칸을 비운 것까지 확인한 뒤, 같은 글을 답장 없이 보낸다.
+    끝 줄 SENT_OK·DRYRUN_OK 뒤에 REPLY_FALLBACK=<이유>를 붙여, 끝 줄만 봐도 답장이 아니라는 것을 안다."""
+    lines.append(f'REPLY_FALLBACK {why} — 답장을 못 붙여 답장 없이 보통 글로 보낸다')
+    if a.mention:
+        ok, more = send_mention(a, text, key, me)
+        lines.extend(more)
+    else:
+        print('\n'.join(lines))  # send_text는 바로 찍는다 — 순서를 지키려고 먼저 내보낸다
+        lines = []
+        with tempfile.NamedTemporaryFile('w', suffix='.txt', delete=False, encoding='utf-8') as f:
+            f.write(text)
+            path = f.name
+        try:
+            rc, last = send_text(a, 'text', path, key, me)
+        finally:
+            os.unlink(path)
+        ok = rc == 0
+        if ok:
+            lines.append('DRYRUN_OK' if a.dry_run else f'SENT_OK {last}')
+    if ok and lines and (lines[-1].startswith('SENT_OK') or lines[-1] == 'DRYRUN_OK'):
+        lines[-1] += f' REPLY_FALLBACK={why}'
+    return ok, lines
+
+
 def send_reply(a: argparse.Namespace, text: str, key: str, me: int) -> tuple[bool, list[str]]:
     lines: list[str] = []
     try:
         target = reply_target(a, key, me)
     except RuntimeError as e:
-        return False, [f'FAIL {e}']
+        if not a.reply_fallback:
+            return False, [f'FAIL {e}']
+        return reply_fallback(a, text, key, me, str(e).split()[0], [f'FAIL_REPLY {e}'])
     lines.append(f"TARGET logId={a.reply_to} self={target['self']} at={target['sentAt']} {str(target['text'])[:40]!r}")
     with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8') as f:
         json.dump({k: target[k] for k in ('text', 'author', 'self')}, f, ensure_ascii=False)
@@ -475,6 +551,9 @@ def send_reply(a: argparse.Namespace, text: str, key: str, me: int) -> tuple[boo
             if leaked(a, key, me, before, lines):
                 return False, lines
             if not res.get('ok'):
+                if a.reply_fallback:
+                    # 답장을 닫고 입력칸 0자·내 새 글 0개를 방금 확인했다
+                    return reply_fallback(a, text, key, me, str(res.get('step')), lines)
                 lines.append(f"FAIL {res.get('step')}")
                 return False, lines
             lines.append('DRYRUN_OK')
@@ -483,12 +562,18 @@ def send_reply(a: argparse.Namespace, text: str, key: str, me: int) -> tuple[boo
         for _ in range(15):
             mine = [r for r in my_new(a, key, me, before) if head in str(r[5])]
             for row in mine:
-                how = reply_link(row, a.reply_to)
+                how = reply_link(row, a.reply_to, int(str(target.get('threadRoot') or 0)))
                 if not how:
                     continue
                 lines.append(f'REPLY_LINK {how} type={row[1]} scope={row[2]} threadId={row[3]}')
                 if a.mention and not mention_lines(str(row[4]), len(a.mention), lines, row[0]):
                     return False, lines
+                body = str(row[5]).replace('\r\n', '\n').strip()
+                want = text.replace('\r\n', '\n').strip()
+                if not (body.endswith(want) if a.mention else body == want):
+                    lines.append(f'FAIL CONTENT_MISMATCH 답장은 나갔다(logId {row[0]}) — DB 글이 파일과 다르다. 다시 보내지 마라')
+                    return False, lines
+                lines.append('CONTENT SAME')
                 lines.append(f'REPLY_OK logId={row[0]} to={a.reply_to}')
                 return True, lines
             if mine:

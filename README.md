@@ -13,7 +13,8 @@ macOS 카카오톡 데스크톱의 로컬 DB를 [kakaocli](https://github.com/si
 - 큰 ID 정밀도, 보내는 중인 임시 줄, 수정 기록 같은 조회 함정
 - 채팅 창으로 글·사진·파일을 보내고 DB로 전송 확인(기본은 미리보기, 실제 전송은 `--send`, `--dry-run` 지원). 사진 여러 장은 「사진 N장」 묶음 하나로
 - 닫힌 채팅 창 열기(본창 목록 줄 메뉴 「채팅방 열기」, 화면 밖 줄은 스크롤 막대로, 같은 이름 줄은 배지·미리보기로 고르기)
-- 특정 글에 답장(오픈채팅은 「댓글」)하고 DB로 답장 연결 확인
+- 특정 글에 답장(오픈채팅은 「댓글」)하고 DB로 답장 연결 확인. 답장을 못 붙이면 입력칸을 비운 뒤 보통 글로 보내는 `--reply-fallback`
+- 보낸 뒤 DB 글을 파일과 글자 대조(`CONTENT SAME`), 창 이름이 다른 방이면 `WRONG_ROOM`으로 알림, 실패해도 입력칸에 글을 남기지 않음
 - 붙여 넣은 「@이름」이 아닌 진짜 멘션 칩 만들기
 - 복제한 카톡 앱 등 다른 대상 앱(`--bundle-id`·`--pid`)
 - 오픈채팅 스레드 답장(`scope=3`, `threadId`) 판정
@@ -23,12 +24,13 @@ macOS 카카오톡 데스크톱의 로컬 DB를 [kakaocli](https://github.com/si
 필요한 것: macOS, 카카오톡 데스크톱(로그인 상태), [kakaocli](https://github.com/silver-flight-group/kakaocli)(`brew install silver-flight-group/tap/kakaocli`), python3 3.9 이상(macOS 기본 `/usr/bin/python3`도 된다). 권한은 SKILL.md §1.
 
 ```bash
-git clone https://github.com/Tygb99/kakaocli-skill.git ~/skills/kakaocli-auth
-ln -s ~/skills/kakaocli-auth ~/.claude/skills/kakaocli-auth     # Claude Code. 다른 에이전트는 그 에이전트의 스킬 폴더(예: ~/.agents/skills/)
+git clone https://github.com/Tygb99/kakaocli-skill.git ~/skills/kakaocli-skill
+ln -s ~/skills/kakaocli-skill ~/.claude/skills/kakaocli-skill     # Claude Code. 다른 에이전트는 그 에이전트의 스킬 폴더(예: ~/.agents/skills/)
 ```
 
-- 에이전트를 새로 시작해야 스킬 목록에 나타난다. 「카톡 검색해줘」처럼 말했을 때 `kakaocli-auth`를 읽으면 설치된 것이다.
-- SKILL.md의 `scripts/...` 명령은 이 폴더(`~/skills/kakaocli-auth`)에서 실행한다.
+- 에이전트를 새로 시작해야 스킬 목록에 나타난다. 「카톡 검색해줘」처럼 말했을 때 `kakaocli-skill`을 읽으면 설치된 것이다.
+- SKILL.md의 `scripts/...` 명령은 이 폴더(`~/skills/kakaocli-skill`)에서 실행한다.
+- 예전 이름 `kakaocli-auth`로 설치했다면: 폴더를 `kakaocli-skill`로 옮기고, 스킬 폴더의 `kakaocli-auth` 링크를 지운 뒤 위 `ln -s`로 다시 건다. 스크립트에 옛 경로(`.../kakaocli-auth/scripts`)를 적어 둔 곳도 바꾼다.
 - 지우기: 심볼릭 링크와 클론 폴더를 지우고, §7에서 만든 env 파일(열쇠가 들어 있다)도 지운다.
 
 ## scripts/

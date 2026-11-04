@@ -3,7 +3,9 @@
 // 사용: osascript -l JavaScript kakao-send-ui.js <창 제목> <글 파일> <set|send|clear>
 //  set   : 입력칸이 비어 있을 때만 글을 넣고 그대로 둔다(확인용)
 //  send  : 입력칸이 비어 있을 때만 글을 넣고 전송 버튼을 누른다
-//  clear : 입력칸에 이 글과 똑같은 글이 있을 때만 비운다(사용자가 치던 글은 건드리지 않음)
+//  clear : 입력칸에 이 글(또는 넣다 만 이 글의 일부)이 있을 때만 비운다(사용자가 치던 글은 건드리지 않음).
+//          지운 뒤 다시 읽어 0자가 될 때까지 최대 4번 지운다.
+// 시험용: 환경변수 KAKAO_FAULT=partial 이면 글을 넣은 뒤 일부러 앞 14자만 남겨 「넣는 도중 실패」를 만든다(뒷정리 시험용).
 // 출력: 한 줄 JSON {ok, step, ...}
 // 대상 앱: 환경변수 KAKAO_BUNDLE_ID(기본 com.kakao.KakaoTalkMac), KAKAO_PID(있으면 그 PID 하나만, 번들 ID가 다르면 멈춤).
 ObjC.import('Foundation');
@@ -37,6 +39,20 @@ function run(argv) {
     const msg = ObjC.unwrap($.NSString.stringWithContentsOfFileEncodingError(file, $.NSUTF8StringEncoding, null));
     if (typeof msg !== 'string' || !msg.length) return JSON.stringify({ ok: false, step: 'FILE_READ', file });
     const norm = (s) => (s || '').replace(/\r\n?/g, '\n');
+    // 지우기가 한 번에 안 먹을 때가 있다(긴 글 일부만 읽힌 뒤 글이 입력칸에 남음) — 지운 뒤 다시 읽어 0자가 될 때까지 최대 4번
+    const wipe = (box) => {
+      for (let i = 0; i < 4; i++) {
+        let cur = '';
+        try { cur = norm(box.value()); } catch (e) { return -1; }
+        if (!cur.length) return 0;
+        try { box.value = ''; } catch (e) {}
+        delay(0.4);
+      }
+      try { return norm(box.value()).length; } catch (e) { return -1; }
+    };
+    // 우리가 넣은 글: 원고와 같거나, 넣는 도중 실패해 원고 앞부분만 남은 것 — 남이 친 글은 지우지 않는다
+    const ours = (cur) => cur === norm(msg) || norm(msg).startsWith(cur) || (cur.length >= 20 && cur.indexOf(norm(msg).slice(0, 20)) === 0);
+    const fault = (() => { try { const v = $.NSProcessInfo.processInfo.environment.objectForKey('KAKAO_FAULT'); return v.isNil() ? '' : ObjC.unwrap(v); } catch (e) { return ''; } })();
     // 같은 제목 창이 여러 개일 수 있고(같은 이름 창 2개를 실제로 겪었다), 카톡이 잠깐 접근성 응답을 안 줄 때가 있어(-1728) 최대 3번 다시 찾는다.
     const find = () => {
       for (let t = 0; t < 3; t++) {
@@ -64,23 +80,28 @@ function run(argv) {
     if (mode === 'clear') {
       // 사용자가 치던 글을 지우지 않는다: 우리가 넣은 글과 똑같을 때만 비운다(10/14 21:2x 사고).
       if (!cur.length) return JSON.stringify({ ok: true, step: 'ALREADY_EMPTY' });
-      if (cur !== norm(msg)) return JSON.stringify({ ok: false, step: 'NOT_OURS', head: cur.slice(0, 40) });
+      if (!ours(cur)) return JSON.stringify({ ok: false, step: 'NOT_OURS', head: cur.slice(0, 40) });
       phase = 'clear';
-      f.box.value = '';
-      return JSON.stringify({ ok: (f.box.value() || '') === '', step: 'CLEARED' });
+      const left = wipe(f.box);
+      return JSON.stringify({ ok: left === 0, step: 'CLEARED', had: cur.length, boxLen: left });
     }
     if (cur.length) return JSON.stringify({ ok: false, step: 'BOX_NOT_EMPTY', head: cur.slice(0, 40) });
     phase = 'set';
     f.box.value = msg;
-    delay(0.5);
+    if (fault === 'partial') { delay(0.3); f.box.value = msg.slice(0, 14); }
     phase = 'verify';
+    // 긴 글은 값이 늦게 다 찬다 — 0.5초 간격으로 최대 4번 다시 읽는다
     let got;
-    try { got = norm(f.box.value()); } catch (e) { f = find(); if (!f) return JSON.stringify({ ok: false, step: 'LOST_AFTER_SET', err: String(e) }); got = norm(f.box.value()); }
+    for (let i = 0; i < 4; i++) {
+      delay(0.5);
+      try { got = norm(f.box.value()); } catch (e) { f = find(); if (!f) return JSON.stringify({ ok: false, step: 'LOST_AFTER_SET', err: String(e) }); got = norm(f.box.value()); }
+      if (got === norm(msg)) break;
+    }
     if (got !== norm(msg)) {
       let i = 0;
       while (i < got.length && got[i] === msg[i]) i++;
-      f.box.value = '';
-      return JSON.stringify({ ok: false, step: 'VALUE_MISMATCH', want: msg.length, got: got.length, at: i, wantCh: msg.charCodeAt(i), gotCh: got.charCodeAt(i) });
+      const left = wipe(f.box);
+      return JSON.stringify({ ok: false, step: 'VALUE_MISMATCH', want: msg.length, got: got.length, at: i, wantCh: msg.charCodeAt(i), gotCh: got.charCodeAt(i), boxLen: left });
     }
     if (mode !== 'send') return JSON.stringify({ ok: true, step: 'SET_ONLY', len: msg.length, tries: f.tries });
     phase = 'press';
