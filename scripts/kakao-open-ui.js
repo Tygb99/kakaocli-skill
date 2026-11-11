@@ -128,7 +128,9 @@ function run(argv) {
     const main = waitFor(() => {
       const w = p.windows().find((x) => { try { return x.name() === '카카오톡'; } catch (e) { return false; } });
       if (!w) return null;
-      try { return w.staticTexts.value().indexOf('채팅') >= 0 ? w : null; } catch (e) { return null; }
+      try { if (w.staticTexts.value().indexOf('채팅') >= 0) return w; } catch (e) {}
+      // 채팅 탭 머리글이 글자칸이 아니라 단추(설명 「채팅」)로 나오는 화면도 있다(2026-11-11 실측: 글자칸은 안 읽은 수 하나뿐). 「채팅방 추가」 단추는 채팅 탭에만 있다.
+      try { const d = w.buttons.description(); return (d.indexOf('채팅') >= 0 && d.indexOf('채팅방 추가') >= 0) ? w : null; } catch (e) { return null; }
     }, 20);
     if (!main) return done({ step: 'NO_CHAT_TAB' });
 
