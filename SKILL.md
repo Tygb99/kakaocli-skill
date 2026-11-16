@@ -1,6 +1,6 @@
 ---
 name: kakaocli-skill
-description: "macOS kakaocli로 카카오톡 로컬 DB를 열어 대화를 검색·조회할 때 쓰는 인증과 조회 절차. '카톡 검색해줘', '톡방에서 찾아봐', '오픈채팅에서 ~ 관련 내용 찾아줘', '카카오톡 대화 읽어줘', '누가 그 말 했어?', '보낸 사람 이름도 보여줘', 'kakaocli 인증이 안 돼', 'auth 실패', 'User ID auto-detection failed', 'PRAGMA key failed' 같은 상황이면 이 스킬을 쓸 것. user ID 자동탐지는 사실상 항상 실패하므로 브루트포스로 뚫고 키를 직접 유도해야 하며, 발신자 이름은 NTUser 조인으로 붙인다 — 이 두 가지를 모르면 시작조차 못 하거나 전부 Unknown으로만 보인다. 조회가 느릴 때('카톡 조회가 느려', 'query가 오래 걸려')는 열쇠·DB 경로를 env에 두고 --db를 넘기는 절차를, '카톡 보내줘', '채팅 창에 글 넣어줘', '사진 보내줘', '사진 여러 장 묶어 보내줘', '파일 보내줘', '그 글에 답장해줘', '멘션 걸어줘', '카톡 창 열어줘', '닫힌 채팅방 열어줘'처럼 카톡 화면을 조작해 보낼 때는 kakao-send.py(닫힌 창 열기 --open, 답장 --reply-to, 진짜 멘션 --mention, 사진 여러 장 묶음, 기본 미리보기·실제 전송 --send·dry-run·DB 확인, 복제한 카톡 앱은 --bundle-id·--pid)를, 오픈채팅 답장이 어느 글에 달린 말인지 판정할 때는 threadId(scope 3)를 다룬다. 키보드·마우스를 쓰지 않고 macOS 손쉬운 사용으로만 조작한다."
+description: "macOS kakaocli로 카카오톡 로컬 DB의 대화를 검색·조회·읽기. 톡방·오픈채팅 검색, 보낸 사람 이름 붙이기, kakaocli 인증 실패(auth·PRAGMA key), 느린 조회, 답장 대상 판정(threadId), 카톡 보내기·답장·사진(kakao-send.py)에 쓴다."
 ---
 
 # kakaocli 인증
