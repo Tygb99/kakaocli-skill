@@ -90,8 +90,25 @@ def ui(title: str, path: str, mode: str) -> dict[str, object]:
     return osa('kakao-send-ui.js', title, path, mode)
 
 
+def list_side(a: argparse.Namespace) -> str:
+    """--chat-id 방이 본창 목록 어느 쪽에 있는지(오픈채팅 = linkId > 0). 열쇠가 env에 없거나 모르면 ''.
+
+    카톡 「오픈채팅 목록 분리」가 켜져 있을 때 kakao-open-ui.js가 그쪽부터 찾게 하는 힌트다(꺼져 있으면 쓰지 않는다).
+    열쇠를 새로 만들면 15~60초라 env 열쇠가 있을 때만 본다.
+    """
+    key = kakao_db.env_val('KAKAO_DB_KEY')
+    if a.chat_id is None or not key:
+        return ''
+    try:
+        rows = kakao_db.q(key, f"SELECT coalesce(linkId,0) FROM NTChatRoom WHERE chatId={a.chat_id}")
+    except RuntimeError:
+        return ''
+    return ('open' if int(rows[0][0]) > 0 else 'chat') if rows else ''
+
+
 def open_window(a: argparse.Namespace) -> dict[str, object]:
-    return osa('kakao-open-ui.js', a.window, 'open', a.open_hint or '')
+    # 본창 목록 읽기는 655줄에 한 번 약 1분이라(2026-11-18 실측) 쪽 바꾸기·스크롤까지 더해 90초를 넘길 수 있다.
+    return osa('kakao-open-ui.js', a.window, 'open', a.open_hint or '', '', list_side(a), timeout=240)
 
 
 def with_window(a: argparse.Namespace, call, lines: list[str]) -> dict[str, object]:

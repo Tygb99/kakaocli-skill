@@ -1,5 +1,5 @@
 // 카카오톡 본창 채팅 목록에서 닫힌 채팅 창을 연다. 키 입력·마우스·클립보드를 쓰지 않고 카톡을 앞으로 띄우지 않는다(System Events 접근성만).
-// 사용: osascript -l JavaScript kakao-open-ui.js <창 제목> <find|open> [hint] [via]
+// 사용: osascript -l JavaScript kakao-open-ui.js <창 제목> <find|open> [hint] [via] [side]
 //  find : 목록에서 그 방 줄을 찾기까지만 한다(메뉴를 열지 않는다)
 //  open : 창을 연다. 그 제목의 창이 이미 있으면 아무것도 누르지 않고 ALREADY_OPEN
 //  hint : 같은 이름의 방 줄이 여럿일 때, 줄의 미리보기 글이나 줄 배지 설명에 든 말로 하나를 고른다.
@@ -7,8 +7,15 @@
 //         오픈채팅은 「badge openchat room」이므로 hint 「badge me」로 나와의 채팅을 고른다.
 //  via  : 오픈프로필로 온 1:1 대화. 본창 줄 이름은 내 오픈프로필 이름(via)이고, 그 줄의 「채팅방 열기」는 대화 창이 아니라
 //         제목 없는 「오픈프로필 대화 목록」 창을 연다. 진짜 대화 창 제목은 상대 이름(<창 제목>)이라 목록 창의 상대 줄을 한 번 더 연다.
+//  side : 「오픈채팅 목록 분리」가 켜져 있을 때 그 방이 있는 쪽(open|chat). 주면 그쪽부터 찾는다(kakao-send.py가 DB linkId로 정해 넘긴다).
 // 대상 앱: 환경변수 KAKAO_BUNDLE_ID(기본 com.kakao.KakaoTalkMac), KAKAO_PID(있으면 그 PID 하나만, 번들 ID가 다르면 멈춤).
 // 순서(실측): 메뉴 「창 → 채팅」 AXPress(본창을 채팅 탭으로) → 본창 목록에서 첫 글자칸이 창 제목과 같은 줄을 찾는다
+//   → 카톡 설정 「오픈채팅 목록 분리」(DB NTSetting `openchatlist_issperated`)가 켜져 있으면 채팅 탭에 「채팅」·「오픈채팅」 단추가 있고
+//     두 쪽 중 한쪽 목록만 보인다. side 쪽(없으면 지금 쪽)에서 먼저 찾고, 없으면 다른 쪽 단추를 AXPress해 한 번 더 찾는다.
+//     끝나면(열었든 못 찾았든) 처음 쪽으로 되돌린다(출력 listSide·listSwitched·listRestored).
+//     분리가 꺼져 있으면 「오픈채팅」 단추 없이 한 목록에 다 있어 누르지 않는다(listSide 「none」).
+//     보이는 쪽은 목록 이름 옆 ▼ 그림(설명 「common icon triangledown …」)의 x로 판정한다 — 「오픈채팅」 단추보다 오른쪽이면 오픈채팅.
+//     단추의 AXHelp(「채팅 목록 전환」)는 목록을 바꿔도 그대로 남을 때가 있어 쓰지 않는다(2026-11-18 실측).
 //   → 줄이 보이는 영역 밖이면 세로 스크롤 막대 값을 바꿔 가운데로 옮긴다(화면 밖 줄은 AXShowMenu에 반응이 없다)
 //   → 그 줄 셀에 AXShowMenu → 「채팅방 열기」 AXPress → 그 제목의 창이 생겼는지 확인. 각 단계는 한 번만 누른다.
 // 열면 그 방의 안 읽은 글이 읽음 처리된다(상대 화면의 숫자 1이 사라진다). 남의 1:1 방을 시험으로 열지 않는다.
@@ -81,10 +88,16 @@ function profileRows(p, title) {
 }
 
 function run(argv) {
-  const [title, mode, hint, via] = argv;
+  const [title, mode, hint, via, side] = argv;
   const se = Application('System Events');
   const out = { ok: false, step: '', title, front0: frontName(se) };
-  const done = (o) => { Object.assign(out, o); out.front1 = frontName(se); return JSON.stringify(out); };
+  let restoreList = null; // 목록 쪽을 바꿨으면 처음 쪽으로 되돌리는 함수
+  const done = (o) => {
+    Object.assign(out, o);
+    if (restoreList) { const r = restoreList; restoreList = null; try { out.listRestored = r(); } catch (e) { out.listRestored = false; } }
+    out.front1 = frontName(se);
+    return JSON.stringify(out);
+  };
   // openlist: via 길 안에서만 쓴다 — 본창 줄의 「채팅방 열기」까지만 누르고 그 제목의 창을 기다리지 않는다.
   if (mode !== 'find' && mode !== 'open' && mode !== 'openlist') return done({ step: 'BAD_MODE' });
   if (!title) return done({ step: 'NO_TITLE' });
@@ -138,12 +151,46 @@ function run(argv) {
     // 줄마다 읽지 않고 한 번에 읽는다(줄마다 읽으면 수백 줄에 수십 초).
     const list = main.scrollAreas[0].uiElements[0];
     let texts = [];
-    const found = waitFor(() => {
-      try { texts = list.rows.uiElements[0].staticTexts.value(); } catch (e) { return null; }
-      const hits = [];
-      texts.forEach((t, i) => { if (t && t.length && nfc(t[0]) === nfc(title)) hits.push(i); });
-      return hits.length ? hits : null;
-    }, 12);
+    // 목록을 못 읽었거나 비었으면 기다린다. 줄이 있는데 이름이 없으면 한 번만 더 읽고 그쪽엔 없다고 본다
+    // (한 번 읽기가 49줄에도 수 초라, 없는 쪽을 12번 읽으면 1분을 넘긴다 — 2026-11-18 실측 85초).
+    const findRows = () => {
+      let seen = 0;
+      for (let i = 0; i < 12; i++) {
+        try { texts = list.rows.uiElements[0].staticTexts.value(); } catch (e) { texts = []; }
+        if (texts.length) {
+          const hits = [];
+          texts.forEach((t, j) => { if (t && t.length && nfc(t[0]) === nfc(title)) hits.push(j); });
+          if (hits.length) return hits;
+          if (++seen >= 2) return null;
+        }
+        delay(0.25);
+      }
+      return null;
+    };
+    const sideBtn = (s) => main.buttons.whose({ description: s === 'open' ? '오픈채팅' : '채팅' })[0];
+    const listSide = () => {
+      try {
+        const tri = main.images().find((i) => { try { return String(i.description()).indexOf('common icon triangledown') === 0; } catch (e) { return false; } });
+        if (!tri) return '';
+        return tri.position()[0] > sideBtn('open').position()[0] ? 'open' : 'chat';
+      } catch (e) { return ''; }
+    };
+    const showSide = (s) => { sideBtn(s).actions.byName('AXPress').perform(); return !!waitFor(() => listSide() === s, 20); };
+    const was = listSide();
+    out.listSide = was || 'none';
+    const order = !was ? [''] : (side === 'open' || side === 'chat') && side !== was ? [side, was] : [was, was === 'open' ? 'chat' : 'open'];
+    let found = null;
+    for (const s of order) {
+      if (s && s !== listSide()) {
+        phase = 'list-side';
+        if (!showSide(s)) return done({ step: 'LIST_NOT_SWITCHED', rowCount: texts.length });
+        out.listSwitched = s;
+        restoreList = s === was ? null : () => showSide(was);
+        phase = 'rows';
+      }
+      found = findRows();
+      if (found) break;
+    }
     out.rowCount = texts.length;
     if (!found) return done({ step: 'NOT_IN_LIST' });
     if (found.length > 1 && hint) {
@@ -161,38 +208,52 @@ function run(argv) {
     phase = 'scroll';
     const sa = main.scrollAreas[0];
     const row = list.rows[found[0]];
-    const visible = () => {
-      const y = row.position()[1], h = row.size()[1], top = sa.position()[1];
-      return y >= top && y + h <= top + sa.size()[1];
-    };
+    // AX가 주는 y·높이는 16비트로 접혀 나온다 — 표가 32767px(74px 줄로 약 440줄)를 넘으면 음수·엉뚱한 값이 된다
+    // (2026-11-18 704줄 목록: 표 높이 -13438, 마지막 줄 y -13162). 그래서 두 값의 차이를 65536으로 펴서 쓴다.
+    const M = 65536;
+    const below = (a, b) => (((a - b) % M) + M) % M; // a가 b보다 아래(0 이상)일 때의 진짜 거리
+    const near = (d) => below(d + M / 2, 0) - M / 2; // 화면 근처 거리(±32768 안)
+    const top = sa.position()[1], saH = sa.size()[1];
+    const visible = () => { const d = near(row.position()[1] - top); return d >= 0 && d + row.size()[1] <= saH; };
     if (!visible()) {
       const bar = sa.scrollBars().find((b) => { try { return b.orientation() === 'AXVerticalOrientation'; } catch (e) { return false; } });
       if (!bar) return done({ step: 'ROW_HIDDEN_NO_SCROLLBAR' });
-      const span = list.size()[1] - sa.size()[1];
-      const off = row.position()[1] - list.position()[1] - sa.size()[1] / 2 + row.size()[1] / 2;
+      const last = list.rows[texts.length - 1];
+      const listY = list.position()[1];
+      const span = below(last.position()[1], listY) + last.size()[1] - saH;
+      const off = below(row.position()[1], listY) - saH / 2 + row.size()[1] / 2;
       const clamp = (v) => Math.min(1, Math.max(0, v));
-      // 목록이 길면(수백 줄) 막대 값과 표 높이가 비례하지 않아 첫 계산이 빗나간다(2026-11-18 655줄 실측).
-      // kakao-reply-ui.js처럼 방금 움직인 거리(표 y 변화 ÷ 막대 값 변화)로 남은 거리를 나눠 최대 8번 다시 옮긴다.
-      let prevV = Number(bar.value()), prevY = list.position()[1];
+      // 첫 계산이 빗나가면 방금 움직인 거리(표 y 변화 ÷ 막대 값 변화)로 남은 거리를 나눠 최대 8번 다시 옮긴다.
+      let prevV = Number(bar.value()), prevY = listY;
       bar.value = clamp(off / span);
       for (let i = 0; i < 8 && !waitFor(visible, 4); i++) {
         const nowV = Number(bar.value()), nowY = list.position()[1];
-        const perUnit = nowV !== prevV ? (prevY - nowY) / (nowV - prevV) : 0;
+        const moved = nowV > prevV ? below(prevY, nowY) : nowV < prevV ? -below(nowY, prevY) : 0;
+        const perUnit = nowV !== prevV ? moved / (nowV - prevV) : 0;
         if (!perUnit) break;
-        const miss = row.position()[1] + row.size()[1] / 2 - (sa.position()[1] + sa.size()[1] / 2);
+        const miss = near(row.position()[1] + row.size()[1] / 2 - (top + saH / 2));
         prevV = nowV; prevY = nowY;
         bar.value = clamp(nowV + miss / perUnit);
       }
       if (!waitFor(visible, 4)) return done({ step: 'ROW_HIDDEN_AFTER_SCROLL' });
+      // 스크롤이 멈춘 뒤에 누른다 — 줄 y를 0.3초 간격으로 두 번 읽어 같고 보이는 자리여야 한다.
+      const settled = waitFor(() => { const y0 = row.position()[1]; delay(0.3); return y0 === row.position()[1] && visible(); }, 10);
+      if (!settled) return done({ step: 'ROW_NOT_SETTLED' });
       out.scrolled = true;
     }
 
     phase = 'menu';
+    // 누르기 직전에 그 자리 줄이 여전히 그 방인지 본다(새 글이 오면 목록 순서가 바뀐다).
+    try { if (nfc(row.uiElements[0].staticTexts[0].value()) !== nfc(title)) return done({ step: 'ROW_MOVED' }); } catch (e) { return done({ step: 'ROW_MOVED' }); }
+    const before = names().map(nfc);
     const r = rowMenuOpen(row.uiElements[0]);
     if (r.step !== 'PRESSED') return done(r);
     if (mode === 'openlist') return done({ ok: true, step: 'PRESSED_LIST' });
     const opened = waitFor(() => count(title) >= 1, 24);
-    return done({ ok: !!opened, step: opened ? 'OPENED' : 'NOT_OPENED_AFTER_PRESS' });
+    if (opened) return done({ ok: true, step: 'OPENED' });
+    // 다른 방 창이 열렸으면 이름을 알린다(2026-11-18 704줄 목록에서 스크롤 뒤 누른 때 다른 방 창이 열린 일이 있다).
+    const extra = names().map(nfc).filter((n) => n && before.indexOf(n) < 0);
+    return done({ step: extra.length ? 'OPENED_OTHER_WINDOW' : 'NOT_OPENED_AFTER_PRESS', other: extra });
   } catch (e) {
     return done({ step: 'AX_ERROR', phase, err: String(e).slice(0, 200) });
   }
