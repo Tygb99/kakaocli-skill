@@ -51,6 +51,7 @@ import argparse
 import filecmp
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -60,6 +61,7 @@ from typing import Any
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import aside_cu  # noqa: E402
 import kakao_db  # noqa: E402
 
 DOWNLOADS = os.path.expanduser('~/Downloads')
@@ -90,25 +92,51 @@ def ui(title: str, path: str, mode: str) -> dict[str, object]:
     return osa('kakao-send-ui.js', title, path, mode)
 
 
-def list_side(a: argparse.Namespace) -> str:
-    """--chat-id 방이 본창 목록 어느 쪽에 있는지(오픈채팅 = linkId > 0). 열쇠가 env에 없거나 모르면 ''.
+def list_place(a: argparse.Namespace) -> tuple[str, str, bool]:
+    """--chat-id 방이 본창 목록 어느 쪽(오픈채팅 = linkId > 0)의 몇 번째 줄쉼인지, 그리고 묶음 줄 안의 방인지. 모르면 ''.
 
-    카톡 「오픈채팅 목록 분리」가 켜져 있을 때 kakao-open-ui.js가 그쪽부터 찾게 하는 힌트다(꺼져 있으면 쓰지 않는다).
+    kakao-open-ui.js가 목록을 다 읽지 않고 그 줄 근처만 읽게 하는 힌트다(다 읽으면 655줄에 약 80초).
+    본창 목록 순서(2026-11-18 앱 목록과 DB 대조): 묶음 줄(조용한 채팅방 type 10000, 댓글 모아보기 10001) → 상단 고정 방(pin >= 0,
+    큰 값 먼저) → 나머지는 NTChatRoom.lastUpdatedAt 내림차순. 「안 읽은 방 먼저」 정렬이면 안 읽은 글이 있는 방이
+    그 안에서 먼저 온다. 이 정렬 설정 값은 DB 설정 표(NTSetting)에 없어, 두 경우의 줄 번호를 둘 다 넘긴다(예: '14,0').
+    vtype = 1인 방(조용한 채팅방·오픈프로필 묶음 안의 방)은 본창 목록에 없다 — 세지 않고 셋째 값을 True로 돌려준다.
+    「오픈채팅 목록 분리」(NTSetting openchatlist_issperated)가 켜져 있으면 그 방 쪽 목록에서만 센다.
     열쇠를 새로 만들면 15~60초라 env 열쇠가 있을 때만 본다.
     """
     key = kakao_db.env_val('KAKAO_DB_KEY')
     if a.chat_id is None or not key:
-        return ''
+        return '', '', False
     try:
-        rows = kakao_db.q(key, f"SELECT coalesce(linkId,0) FROM NTChatRoom WHERE chatId={a.chat_id}")
+        me = kakao_db.q(key, f"SELECT coalesce(linkId,0) > 0, coalesce(vtype,0) FROM NTChatRoom WHERE chatId={a.chat_id}")
+        if not me:
+            return '', '', False
+        is_open, vtype = (int(x) for x in me[0])
+        side = 'open' if is_open else 'chat'
+        if vtype:
+            return side, '', True
+        split = kakao_db.q(key, "SELECT boolValue FROM NTSetting WHERE key='openchatlist_issperated'")
+        same_side = f" AND (coalesce(linkId,0) > 0) = {is_open}" if not split or int(split[0][0]) else ''
+        rooms = kakao_db.q(key, "SELECT chatId, coalesce(type,0), coalesce(pin,-1), coalesce(countOfNewMessage,0) > 0, "
+                                f"coalesce(lastUpdatedAt,0) FROM NTChatRoom WHERE coalesce(vtype,0) = 0{same_side}")
     except RuntimeError:
-        return ''
-    return ('open' if int(rows[0][0]) > 0 else 'chat') if rows else ''
+        return '', '', False
+    guesses: list[str] = []
+    for unread_first in (True, False):
+        order = sorted(rooms, key=lambda r: (r[1] < 10000, r[1] if r[1] >= 10000 else 0, r[2] < 0, -r[2],
+                                             unread_first and not r[3], -r[4]))
+        at = next((str(i) for i, r in enumerate(order) if int(r[0]) == a.chat_id), '')
+        if at and at not in guesses:
+            guesses.append(at)
+    return side, ','.join(guesses), False
 
 
 def open_window(a: argparse.Namespace) -> dict[str, object]:
-    # 본창 목록 읽기는 655줄에 한 번 약 1분이라(2026-11-18 실측) 쪽 바꾸기·스크롤까지 더해 90초를 넘길 수 있다.
-    return osa('kakao-open-ui.js', a.window, 'open', a.open_hint or '', '', list_side(a), timeout=240)
+    # 줄 번호 짐작이 빗나가면 목록을 다 읽는다 — 655줄에 한 번 약 80초라(2026-11-18 실측) 쪽 바꾸기·스크롤까지 더해 90초를 넘길 수 있다.
+    side, near, in_folder = list_place(a)
+    if in_folder:
+        # 묶음 줄(조용한 채팅방·오픈프로필) 안의 방은 본창 목록에 줄이 없다 — 목록을 다 읽어도(약 80초) 못 찾는다
+        return {'ok': False, 'step': 'ROOM_IN_FOLDER'}
+    return osa('kakao-open-ui.js', a.window, 'open', a.open_hint or '', '', side, near, timeout=240)
 
 
 def with_window(a: argparse.Namespace, call, lines: list[str]) -> dict[str, object]:
@@ -172,10 +200,14 @@ def main() -> int:
     ap.add_argument('--file', dest='items', action='append', type=lambda s: ('text', s), help='보낼 글 파일')
     ap.add_argument('--photo', dest='items', action='append', type=lambda s: ('photo', s), help='보낼 사진')
     ap.add_argument('--attach', dest='items', action='append', type=lambda s: ('attach', s), help='보낼 파일')
+    ap.add_argument('--emoticon', dest='items', action='append', type=lambda s: ('emoticon', s),
+                    help='보낼 카카오 이모티콘(<상품번호>.emot_<순번>.<확장자>, Aside Computer Use 필요)')
     ap.add_argument('--reply-to', type=int, metavar='logId', help='이 글에 답장으로 보낸다(--file 하나와만)')
     ap.add_argument('--reply-fallback', action='store_true',
                     help='답장을 못 붙이면 입력칸을 비운 뒤 답장 없이 보통 글로 보낸다(없으면 FAIL로 멈춤)')
     ap.add_argument('--mention', action='append', default=[], metavar='이름', help='글 맨 앞에 진짜 멘션(여러 번)')
+    ap.add_argument('--paste', action='store_true',
+                    help='사진·파일을 클립보드로 붙여 보낸다(카톡이 몇 초 앞으로 온다, 사진 여러 장은 묶음 하나)')
     ap.add_argument('--open', action='store_true', help='창이 닫혀 있으면 본창 목록에서 연다')
     ap.add_argument('--open-only', action='store_true', help='창만 열고 보내지 않는다')
     ap.add_argument('--open-hint', default='', help='같은 이름 방이 여럿일 때 미리보기 글로 고르는 말')
@@ -211,15 +243,15 @@ def main() -> int:
         ap.error('--reply-to·--mention은 --file 하나와만 쓴다')
     if a.reply_fallback and not a.reply_to:
         ap.error('--reply-fallback은 --reply-to와 같이 쓴다')
-    for _, p in a.items:
-        if not os.path.isfile(p):
+    for kind, p in a.items:
+        if kind != 'emoticon' and not os.path.isfile(p):
             print(f'FAIL NO_SUCH_FILE {p}')
             return 1
     if not a.send and not a.dry_run:
         return preview(a, a.items)
 
     key, me = '', 0
-    if a.send or special:
+    if a.send or special or any(kind == 'emoticon' for kind, _ in a.items):
         me = int(a.me or kakao_db.env_val('KAKAO_USER_ID') or 0)
         if not me:
             print('FAIL NO_USER_ID (--me 또는 KAKAO_USER_ID)')
@@ -247,7 +279,14 @@ def main() -> int:
             groups.append((kind, [p]))
     last = ''
     for kind, ps in groups:
-        rc, last = send_text(a, kind, ps[0], key, me) if kind == 'text' else send_attachment(a, kind, ps, key, me)
+        if kind == 'emoticon':
+            rc = 0
+            for p in ps:
+                rc, last = send_emoticon(a, p, key, me)
+                if rc:
+                    break
+        else:
+            rc, last = send_text(a, kind, ps[0], key, me) if kind == 'text' else send_attachment(a, kind, ps, key, me)
         if rc:
             return rc
     print('DRYRUN_OK' if a.dry_run else f'SENT_OK {last}')
@@ -283,7 +322,9 @@ def send_text(a: argparse.Namespace, _kind: str, p: str, key: str, me: int) -> t
         # 넣다 만 글이 입력칸에 남아 다음 보내기를 막지 않게 비운다(우리 글일 때만). UI 오류여도 실제로 나갔을 수 있어 DB도 본다.
         print(json.dumps(ui(a.window, path, 'clear'), ensure_ascii=False))
     head = msg[:40]
-    for _ in range(15 if res.get('ok') else 6):
+    # DB에는 보통 1초 안에 들어온다 — 0.3초 간격으로 본다(누른 뒤 15초, UI 단계가 실패했으면 6초까지)
+    deadline = time.time() + (15 if res.get('ok') else 6)
+    while time.time() < deadline:
         rows = kakao_db.q(key, f"SELECT logId, sentAt, coalesce(message,'') FROM NTChatMessage WHERE chatId={a.chat_id} "
                                f"AND authorId={me} AND sentAt>={start} AND logId>{before} AND logId<{PENDING} "
                                f"AND substr(message,1,{len(head)})={sql_str(head)} ORDER BY logId DESC LIMIT 1")
@@ -296,7 +337,7 @@ def send_text(a: argparse.Namespace, _kind: str, p: str, key: str, me: int) -> t
                 return 1, ''
             print('CONTENT SAME')
             return 0, kst(sent_at)
-        time.sleep(1)
+        time.sleep(0.3)
     if not res.get('ok'):
         print(f"FAIL {res.get('step')}")
         return 1, ''
@@ -330,7 +371,7 @@ def send_attachment(a: argparse.Namespace, kind: str, paths: list[str], key: str
     lines: list[str] = []
     try:
         if a.dry_run:
-            res = with_window(a, lambda: osa('kakao-clip-ui.js', a.window, 'check', *staged), lines)
+            res = with_window(a, lambda: attach_ui(a, 'check', staged), lines)
             print('\n'.join(lines + [json.dumps(res, ensure_ascii=False)]))
             if not res.get('ok'):
                 print(f"FAIL {res.get('step')}")
@@ -340,7 +381,16 @@ def send_attachment(a: argparse.Namespace, kind: str, paths: list[str], key: str
         types = TYPES[kind]
         before = max_log(a, key)
         start = int(time.time()) - 2
-        res = with_window(a, lambda: osa('kakao-clip-ui.js', a.window, 'send', *staged), lines)
+
+        def arrived(count: int) -> bool:
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                if len(my_new(a, key, me, before)) >= count:
+                    return True
+                time.sleep(0.5)
+            return False
+
+        res = with_window(a, lambda: attach_ui(a, 'send', staged, arrived), lines)
         print('\n'.join(lines + [json.dumps(res, ensure_ascii=False)]))
         if not res.get('ok'):
             print(f"FAIL {res.get('step')}")
@@ -366,6 +416,199 @@ def send_attachment(a: argparse.Namespace, kind: str, paths: list[str], key: str
             for c in copies:
                 if os.path.exists(c):
                     os.remove(c)
+
+
+def attach_ui(a: argparse.Namespace, mode: str, staged: list[str], arrived=None) -> dict[str, object]:
+    """사진·파일을 채팅 창에 붙인다(mode: check는 확인 시트까지 갔다 취소, send는 전송).
+
+    기본은 「파일전송」 단추 길(kakao-attach-ui.js): 카톡을 앞으로 띄우지 않고 클립보드를 쓰지 않는다. 하나씩 보내며,
+    앞 것이 DB에 들어온 뒤에 다음 것을 보낸다(arrived). --paste면 클립보드 붙여넣기(kakao-clip-ui.js): 카톡이 몇 초 앞으로
+    오지만 사진 여러 장이 「사진 N장」 묶음 하나로 간다.
+    """
+    if a.paste:
+        return osa('kakao-clip-ui.js', a.window, mode, *staged)
+    res: dict[str, object] = {'ok': False, 'step': 'NO_FILES'}
+    for i, path in enumerate(staged):
+        res = osa('kakao-attach-ui.js', a.window, mode, os.path.basename(path))
+        if not res.get('ok'):
+            return res
+        if arrived and i + 1 < len(staged) and not arrived(i + 1):
+            return {'ok': False, 'step': f'NOT_IN_DB_AFTER_{i + 1}'}
+    return res
+
+
+EMOTICON_TYPES = (6, 12, 20, 25)
+EMOTICON_RE = re.compile(r'^(\d+)\.emot_(\d+)\.[a-z0-9]+$')
+# Aside repl에서 이모티콘 창의 탭·칸 요소 번호를 읽는다. 창은 kakao-emoticon-ui.js가 알려 준 자리로 찾는다.
+# Aside가 찍는 역할 이름(스크롤 영역·이미지·스크롤 막대·버튼 다음·버튼 이전)은 한국어 화면에서 확인한 값이다.
+PICKER_JS = """
+var app = await computer.getApp({ bundleId: %(bundle)s, access: 'control' });
+var kpick = async () => {
+  const w = (await app.listWindows({ emit: false })).find((x) => x.bounds && x.bounds.x === %(x)d && x.bounds.y === %(y)d && x.bounds.width === %(w)d);
+  if (!w) return null;
+  const ls = String(await app.getAXState({ windowId: w.windowId, disableDiffing: true, emit: false })).split('\\n');
+  const at = ls.map((l, i) => (/스크롤 영역/.test(l) ? i : -1)).filter((i) => i >= 0);
+  if (at.length < 2) return null;
+  const end = ls.findIndex((l, i) => i > at[1] && /스크롤 막대/.test(l));
+  const ids = (a, b) => ls.slice(a, b).map((l) => (l.match(/^\\s*\\[(\\d+)\\] 이미지/) || [])[1]).filter(Boolean).map(Number);
+  const button = (name) => Number((ls.join(' ').match(new RegExp('\\\\[(\\\\d+)\\\\] 버튼 ' + name)) || [])[1] || -1);
+  return { tabs: ids(at[0], at[1]), cells: ids(at[1], end < 0 ? ls.length : end), next: button('다음'), prev: button('이전') };
+};
+console.log('KPICK ' + JSON.stringify(await kpick()));
+"""
+
+
+def pick_emoticon(cu: Any, key: str, title: str, item: str, index: int, picker: list[int], bundle: str, click: bool) -> str:
+    """이모티콘 창에서 그 상품 탭을 찾고 index번째(1부터) 칸을 누른다. 된 일이면 '', 아니면 실패 이름.
+
+    탭에는 이름이 없다 — 카톡이 지금 고른 탭의 상품번호를 DB 설정 emoticon.selecteditemid에 바로 적으므로(2026-11-18 실측),
+    탭을 하나씩 누르며 그 값이 item이 될 때까지 찾는다. 칸은 이모티콘 순번 순서로 놓인다(셋째 칸 = emot_003).
+    """
+    def chosen() -> str:
+        rows = kakao_db.q(key, "SELECT coalesce(stringValue,'') FROM NTSetting WHERE key='emoticon.selecteditemid'")
+        return str(rows[0][0]) if rows else ''
+
+    def state(code: str = "console.log('KPICK ' + JSON.stringify(await kpick()));") -> dict[str, Any] | None:
+        line = next((ln for ln in cu.run(code).splitlines() if ln.startswith('KPICK ')), '')
+        return json.loads(line[6:]) if line else None
+
+    st = state(PICKER_JS % {'bundle': json.dumps(bundle), 'x': picker[0], 'y': picker[1], 'w': picker[2]})
+    if not st:
+        return 'NO_PICKER_STATE'
+    # 몇 번째 탭 그림이 어느 상품인지 찾은 만큼 적어 둔다(이모티콘 목록이 바뀌면 카톡의 emoticon_keyboard_revision이 바뀌어 다시 찾는다).
+    # Aside는 화면이 바뀌면 앞서 받은 요소 번호를 거절해서, 누를 때마다 상태를 새로 읽는다.
+    rev = kakao_db.q(key, "SELECT coalesce(integerValue,0) FROM NTSetting WHERE key='emoticon_keyboard_revision'")
+    revision = int(rev[0][0]) if rev else 0
+    cache_path = os.path.expanduser('~/.cache/kakaocli-skill/emoticon-tabs.json')
+    tabs: dict[str, str] = {}
+    try:
+        with open(cache_path, encoding='utf-8') as f:
+            saved = json.load(f)
+        if isinstance(saved, dict) and saved.get('revision') == revision and saved.get('bundle') == bundle:
+            tabs = {str(i): str(v) for i, v in (saved.get('tabs') or {}).items()}
+    except (OSError, ValueError):
+        pass
+    def press(pick: Any) -> bool:
+        """상태를 새로 읽어 pick이 고른 요소를 누른다. 요소가 없거나 화면 밖이라 Aside가 못 누르면 False."""
+        now = state()
+        el = pick(now) if now else None
+        if el is None or int(el) < 0:
+            return False
+        try:
+            cu.run(f'await app.click({int(el)});')
+        except aside_cu.AsideError as e:
+            if 'no visible click bounds' in str(e):
+                return False
+            raise
+        return True
+
+    def show_tab(i: int) -> bool:
+        """i번째 탭 그림을 누른다. 탭 줄은 한 번에 8개만 보여, 안 보이면 「다음」으로 넘기고 그래도 없으면 「이전」으로 맨 앞부터 다시 넘긴다."""
+        def tab(now: dict[str, Any]) -> int | None:
+            return now['tabs'][i] if i < len(now['tabs']) else None
+
+        for rewind in (False, True):
+            if rewind:
+                for _ in range(5):
+                    press(lambda now: now['prev'])
+            for _ in range(5):
+                if press(tab):
+                    return True
+                if not press(lambda now: now['next']):
+                    break
+        return False
+
+    try:
+        known = [int(i) for i, v in tabs.items() if v == item]
+        for i in known + [i for i in range(2, len(st['tabs'])) if str(i) not in tabs]:  # 앞 두 탭은 최근 쓴 것·이모티콘 플러스
+            if chosen() == item:
+                break
+            if show_tab(i):
+                time.sleep(0.25)
+                tabs[str(i)] = chosen()
+    finally:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, 'w', encoding='utf-8') as f:
+            json.dump({'revision': revision, 'bundle': bundle, 'count': len(st['tabs']), 'tabs': tabs}, f)
+    if chosen() != item:
+        return 'EMOTICON_ITEM_NOT_OWNED'
+    # 격자는 보이는 칸 근처만 접근성 트리에 올린다(처음 20칸) — 스크롤하면 「트리의 몇 번째 칸」과 이모티콘 순번이 어긋난다.
+    # 그래서 칸마다 실제 번호(AXIndex)와 화면 안에 있는지를 읽어, 원하는 번호가 보일 때만 그 자리의 칸을 누른다.
+    for scroll in ('', '0.2', '0.4', '0.6', '0.8', '1'):
+        got = osa('kakao-emoticon-ui.js', title, 'cells', scroll)
+        indexes, shown = got.get('indexes'), got.get('shown')
+        if not isinstance(indexes, list) or not isinstance(shown, list) or index - 1 not in indexes:
+            continue
+        at = indexes.index(index - 1)
+        if not shown[at]:
+            continue
+        if not click:
+            return ''
+        return '' if press(lambda cur: cur['cells'][at] if len(cur['cells']) == len(indexes) else None) else 'EMOTICON_CELL_NOT_PRESSED'
+    return 'EMOTICON_NOT_IN_GRID'
+
+
+def send_emoticon(a: argparse.Namespace, path: str, key: str, me: int) -> tuple[int, str]:
+    """카카오 이모티콘 하나를 보낸다. path는 DB attachment의 path 꼴(<상품번호>.emot_<순번>.<확장자>).
+
+    이모티콘 창을 열고 닫고 「전송」을 누르는 것은 접근성(kakao-emoticon-ui.js), 탭·칸을 누르는 것은 Aside Computer Use(aside_cu.py)다 —
+    칸에는 접근성 누르기 동작이 없고, 카톡 PID로 보낸 마우스·키도 뒤에 있는 창에서는 먹지 않았다(2026-11-18 실측).
+    --dry-run은 탭을 찾는 데까지만 하고 칸을 누르지 않는다. 판정은 DB의 새 이모티콘 글 path가 같은지로만 한다.
+    """
+    m = EMOTICON_RE.match(path)
+    if not m:
+        print(f'FAIL BAD_EMOTICON {path} (<상품번호>.emot_<순번>.<확장자> 꼴이어야 한다)')
+        return 1, ''
+    lines: list[str] = []
+    res = with_window(a, lambda: osa('kakao-emoticon-ui.js', a.window, 'open'), lines)
+    print('\n'.join(lines + [json.dumps(res, ensure_ascii=False)]))
+    if not res.get('ok'):
+        print(f"FAIL {res.get('step')}")
+        return 1, ''
+    before = max_log(a, key)
+    spot = res.get('picker')
+    picker = [int(v) for v in spot] if isinstance(spot, list) else [0, 0, 0]
+    bundle = os.environ.get('KAKAO_BUNDLE_ID') or 'com.kakao.KakaoTalkMac'
+    cu = None
+    try:
+        cu = aside_cu.AsideCU(bundle)
+        why = pick_emoticon(cu, key, a.window, m[1], int(m[2]), picker, bundle, not a.dry_run)
+    except aside_cu.AsideError as e:
+        why = str(e).split()[0]
+        print(f'ASIDE {e}')
+    finally:
+        if cu:
+            cu.close()
+    if why or a.dry_run:
+        print(json.dumps(osa('kakao-emoticon-ui.js', a.window, 'close'), ensure_ascii=False))
+        if why:
+            print(f'FAIL {why}')
+        return (1 if why else 0), ''
+    pressed = osa('kakao-emoticon-ui.js', a.window, 'send')
+    print(json.dumps(pressed, ensure_ascii=False))
+    if not pressed.get('ok'):
+        print(json.dumps(osa('kakao-emoticon-ui.js', a.window, 'close'), ensure_ascii=False))
+        print(f"FAIL {pressed.get('step')}")
+        return 1, ''
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        for log_id, typ, _scope, _thread, att, _msg, sent_at in my_new(a, key, me, before):
+            if int(typ) & 0x3FFF not in EMOTICON_TYPES:
+                continue
+            try:
+                got = json.loads(str(att))
+            except json.JSONDecodeError:
+                got = {}
+            got_path = str(got.get('path') or got.get('url') or '')
+            if got_path != path:
+                print(f'FAIL EMOTICON_MISMATCH 다른 이모티콘이 나갔다(logId {log_id}, {got_path}). 다시 보내지 마라')
+                return 1, ''
+            print(f'EMOTICON_OK type={typ} logId={log_id} {kst(sent_at)} {got_path}')
+            osa('kakao-emoticon-ui.js', a.window, 'close')  # 보낸 뒤에도 이모티콘 창이 남을 때가 있다
+            return 0, kst(sent_at)
+        time.sleep(0.3)
+    print('FAIL NOT_IN_DB — 다시 보내기 전에 DB로 그 방을 먼저 본다')
+    return 1, ''
 
 
 def max_log(a: argparse.Namespace, key: str) -> int:

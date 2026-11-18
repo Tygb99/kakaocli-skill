@@ -54,9 +54,11 @@ function run(argv) {
     const ours = (cur) => cur === norm(msg) || norm(msg).startsWith(cur) || (cur.length >= 20 && cur.indexOf(norm(msg).slice(0, 20)) === 0);
     const fault = (() => { try { const v = $.NSProcessInfo.processInfo.environment.objectForKey('KAKAO_FAULT'); return v.isNil() ? '' : ObjC.unwrap(v); } catch (e) { return ''; } })();
     // 같은 제목 창이 여러 개일 수 있고(같은 이름 창 2개를 실제로 겪었다), 카톡이 잠깐 접근성 응답을 안 줄 때가 있어(-1728) 최대 3번 다시 찾는다.
+    // 창 제목 목록이 정상으로 읽혔는데 그 제목이 없으면 창이 닫힌 것이다 — 다시 찾지 않고 바로 돌려준다(예전엔 1초씩 쉬며 3번 찾아 약 3.5초를 썼다).
     const find = () => {
       for (let t = 0; t < 3; t++) {
         try {
+          if (p.windows.name().indexOf(title) < 0) return null;
           for (const w of p.windows()) {
             let name = '';
             try { name = w.name(); } catch (e) { continue; }
@@ -90,10 +92,10 @@ function run(argv) {
     f.box.value = msg;
     if (fault === 'partial') { delay(0.3); f.box.value = msg.slice(0, 14); }
     phase = 'verify';
-    // 긴 글은 값이 늦게 다 찬다 — 0.5초 간격으로 최대 4번 다시 읽는다
+    // 긴 글은 값이 늦게 다 찬다 — 바로 한 번 읽고, 다르면 0.5초 간격으로 최대 4번 다시 읽는다
     let got;
-    for (let i = 0; i < 4; i++) {
-      delay(0.5);
+    for (let i = 0; i < 5; i++) {
+      delay(i ? 0.5 : 0.1);
       try { got = norm(f.box.value()); } catch (e) { f = find(); if (!f) return JSON.stringify({ ok: false, step: 'LOST_AFTER_SET', err: String(e) }); got = norm(f.box.value()); }
       if (got === norm(msg)) break;
     }
@@ -108,7 +110,7 @@ function run(argv) {
     const btns = f.w.buttons.whose({ name: '전송' })();
     if (!btns.length) return JSON.stringify({ ok: false, step: 'NO_SEND_BUTTON' });
     try { btns[0].actions.byName('AXPress').perform(); } catch (e) { /* 카톡은 AXPress에 오류를 내도 실제로 보낸다 — DB로 확인 */ }
-    delay(1);
+    delay(0.5);
     let after = -1;
     try { after = (f.box.value() || '').length; } catch (e) {}
     return JSON.stringify({ ok: true, step: 'PRESSED', boxAfter: after });

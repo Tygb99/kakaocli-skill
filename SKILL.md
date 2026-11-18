@@ -320,20 +320,22 @@ kakaocli query "<SQL>" --db "$KAKAO_DB_PATH" --key "$KAKAO_DB_KEY"
 
 ---
 
-## 8. 채팅 창으로 보내기(글·사진·파일·답장·멘션, 창 열기) — `scripts/kakao-send.py`
+## 8. 채팅 창으로 보내기(글·사진·파일·이모티콘·답장·멘션, 창 열기) — `scripts/kakao-send.py`
 
-사용자의 마우스·키보드를 쓰지 않고(System Events 접근성만) 채팅 창으로 글·사진·파일·답장·멘션을 보낸 뒤, DB에 내 메시지가 생겼는지로 성공을 판정한다. 창이 닫혀 있으면 `--open`으로 본창 목록에서 연다(§8-2). 사진·파일은 클립보드로 붙이므로 그동안 카톡이 몇 초 앞으로 온다(§8-1). 답장은 §8-3, 멘션은 §8-4, 복제한 카톡 앱 같은 다른 대상 앱은 §8-5.
+사용자의 마우스·키보드를 쓰지 않고(System Events 접근성만) 채팅 창으로 글·사진·파일·답장·멘션을 보낸 뒤, DB에 내 메시지가 생겼는지로 성공을 판정한다. 카톡을 앞으로 띄우지 않는다 — 사용자가 보던 창은 맨 위 그대로다. 창이 닫혀 있으면 `--open`으로 본창 목록에서 연다(§8-2, 나와의 채팅 기준 보내기까지 약 6초). 사진·파일은 「파일전송」 단추로 뒤에서 보낸다(§8-1). 이모티콘은 §8-6(Aside Computer Use 필요), 답장은 §8-3, 멘션은 §8-4, 복제한 카톡 앱 같은 다른 대상 앱은 §8-5.
 
 ```bash
 export KAKAO_ENV_FILE=~/.config/<이름>/secrets.env
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt              # 미리보기만(기본, 카톡 안 건드림)
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt --dry-run    # 넣었다 지우기만
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt --me <USER_ID> --send
-# 사진·파일: --photo / --attach (여러 번 쓸 수 있다, --file과 섞어도 된다 — 적은 순서대로, 같은 종류가 이어지면 한 번에 붙인다)
+# 사진·파일: --photo / --attach (여러 번 쓸 수 있다, --file과 섞어도 된다 — 적은 순서대로 하나씩 보낸다)
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --photo a.jpg --attach report.pdf --dry-run
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --photo a.jpg --attach report.pdf --me <USER_ID> --send
-# 사진 여러 장을 「사진 N장」 묶음 하나로
-python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --photo 1.jpg --photo 2.jpg --me <USER_ID> --send
+# 사진 여러 장을 「사진 N장」 묶음 하나로: --paste (클립보드 붙여넣기 — 카톡이 몇 초 앞으로 온다)
+python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --photo 1.jpg --photo 2.jpg --paste --me <USER_ID> --send
+# 카카오 이모티콘(§8-6): DB attachment의 path 그대로
+python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --emoticon 2222021.emot_003.png --me <USER_ID> --send
 # 닫힌 창 열기(§8-2): 열기만, 또는 보내기 전에 닫혀 있으면 열기
 python3 scripts/kakao-send.py --window "<창 제목>" --open-only
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt --open --me <USER_ID> --send
@@ -356,7 +358,12 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file
 | `OPEN_OK <제목> OPENED·ALREADY_OPEN` | `--open-only`로 창을 열었거나 이미 열려 있었다. 아무것도 보내지 않았다 |
 | `FAIL LEAKED <logId>` | 답장·멘션 dry-run이나 실패 뒤 DB에 내 새 글이 생겼다 — 보내면 안 되는 글이 나갔다. 그 방을 바로 확인한다 |
 | `FAIL REPLY_NOT_LINKED` | 글은 나갔지만 답장으로 이어지지 않고 보통 글로 갔다. 다시 보내지 마라 |
-| `FAIL WINDOW_OPEN_FAILED <이유>`·`AMBIGUOUS` | `--open`으로 창을 못 열었다. 같은 이름 줄이 여럿이면 `--open-hint`(§8-2) |
+| `FAIL WINDOW_OPEN_FAILED <이유>`·`AMBIGUOUS` | `--open`으로 창을 못 열었다. 같은 이름 줄이 여럿이면 `--open-hint`(§8-2). 이유가 `ROOM_IN_FOLDER`면 「조용한 채팅방」·오픈프로필 묶음 안의 방이라 본창 목록에 줄이 없다 — 그 방 창을 사람이 열어 둬야 한다 |
+| `EMOTICON_OK type=… logId=… <path>` | 이모티콘이 나갔고 DB의 path가 요청과 같다(§8-6) |
+| `FAIL EMOTICON_ITEM_NOT_OWNED`·`EMOTICON_NOT_IN_GRID`·`EMOTICON_CELL_NOT_PRESSED` | 그 상품이 이 맥 이모티콘 창에 없거나, 그 순번 칸이 격자에 없거나, 칸을 누르지 못했다. 보내지 않았다 |
+| `FAIL EMOTICON_MISMATCH` | 다른 이모티콘이 나갔다. 다시 보내지 마라 — 그 방을 DB로 확인한다 |
+| `FAIL ASIDE_…` | Aside가 없거나 Computer Use가 꺼져 있거나 응답이 없다(§8-6). 보내지 않았다 |
+| `FAIL NO_OPEN_PANEL`·`FILE_NOT_IN_LIST`·`AMBIGUOUS_FILE`·`NO_FILE_VIEW` | 「파일전송」 열기 시트에서 멈췄다(§8-1). 보내지 않았다. `NO_FILE_VIEW`는 열기 시트가 아이콘·갤러리 보기일 때다 — 계층 보기나 목록 보기로 바꾸거나 `--paste` |
 | `FAIL MENTION_NOT_FOUND`·`MENTION_AMBIGUOUS`·`PICKER_NOT_SHOWN`·`WINDOW_NOT_MAIN` | 멘션 칩을 못 만들어 입력칸을 비우고 멈췄다(§8-4) |
 | `FAIL WRONG_APP`·`APP_COUNT` | `--pid`의 앱 번들 ID가 `--bundle-id`와 다르거나, 그 번들 ID 앱이 여럿 떠 있다(§8-5) |
 | `FAIL STAGE_CONFLICT` | `~/Downloads`에 같은 이름의 다른 파일이 있다. 덮지 않는다 — 파일 이름을 바꿔서 다시 |
@@ -378,23 +385,28 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file
 - `메시지 입력`·`전송`은 한국어 UI에서 확인한 이름이다. 다른 언어 UI면 `kakao-send-ui.js`의 두 문자열을 바꾼다.
 - JXA 메모: `app.read(path, {as:'utf8'})`는 null을 준다 → `$.NSString.stringWithContentsOfFileEncodingError`로 읽는다.
 
-### 8-1. 사진·파일은 1장·1개여도 클립보드로 붙인다 — `kakao-clip-ui.js`
+### 8-1. 사진·파일은 「파일전송」 단추로 뒤에서 보낸다 — `kakao-attach-ui.js`(묶음은 `--paste`, `kakao-clip-ui.js`)
 
-- 순서: 클립보드를 통째로 저장 → NSPasteboard에 파일 URL·`NSFilenamesPboardType` → 카톡을 잠깐 앞으로, 그 창 AXRaise, 입력칸(`메시지 입력`) 초점 → 메뉴 「편집 → 붙여넣기」 AXPress → 확인 시트 「N개 전송」 → (사진 여러 장이면 「묶어보내기」 안내 시트 「확인」) → 쓰던 앱을 다시 앞으로 → 클립보드 되돌림. 성공은 DB의 새 행 type으로만 판정한다(사진 2, 파일 18, 여러 장 묶음 27).
-- **카톡이 맨 앞 앱일 때만** 붙여넣기가 먹는다(뒤에 있으면 아무 일도 안 한다 — 창 AXRaise·AXMain·AXFocused로도 안 됨). 그래서 몇 초 앞으로 띄우고, 끝나면 원래 맨 앞 앱(PID로 비교)과 원래 클립보드(모든 항목·종류)를 되돌린다. 출력 JSON의 `clipRestored`·`clipTextSame`으로 확인한다.
-- 붙여넣기는 `~/Downloads` 아래 파일만 받는다(외장 디스크 경로는 「존재하지 않는 항목」). 그래서 `kakao-send.py`가 다른 곳의 파일을 **같은 이름으로 `~/Downloads`에 잠깐 복사**하고 끝나면 지운다. 이름을 바꾸지 않는 것은 받는 사람에게 파일 이름이 그대로 보이기 때문이다. `NOT_IN_DB`면 복사본을 남겨 두고 경로를 알려 준다.
-- 같은 종류(`--photo`끼리, `--attach`끼리)가 이어지면 한 번에 붙인다. 사진 여러 장은 「사진 N장」 묶음 하나(type 27)로 간다.
-- 예전 길 — 「파일전송 ⌘O」 열기 창에서 `~/Downloads` 목록으로 고르는 `kakao-attach-ui.js`는 카톡을 앞으로 띄우지 않지만, 행 선택이 가끔 안 먹고(`NOT_SELECTED`, 2026-10-24 실측) 한 번에 하나만 고를 수 있다. `kakao-send.py`는 더 이상 이 길을 쓰지 않는다(파일은 손으로 부를 수 있게 남겨 둔다).
-- `편집`·`붙여넣기`(또는 `Paste`)·`메시지 입력`·`취소`·`N개 전송`·`확인`은 한국어 UI에서 확인한 이름이다.
+- **기본 길(뒤에서)**: 채팅 창의 「파일전송 ⌘O」 AXPress → 열기 시트 → 사이드바 「다운로드」 선택 → 그 이름의 파일을 찾아 연다(계층 보기는 항목의 `AXOpen`, 목록 보기는 줄 선택 뒤 「열기」) → 확인 시트 「1개 전송」. 마우스·키보드·클립보드를 쓰지 않고 카톡을 앞으로 띄우지 않는다. 시트는 채팅 창에 붙어 뜨고 사용자가 보던 창 아래에 머문다(2026-11-18 나와의 채팅에 사진 1장: 6.2초, DB type 2, 맨 앞 앱·창 그대로).
+- 한 번에 하나씩 보낸다. 여러 개면 앞 것이 DB에 들어온 뒤 다음 것을 보내며, 사진 여러 장은 따로따로 간다(묶음이 아니다).
+- 열기 시트는 마지막에 쓴 폴더·보기 방식으로 열린다. 계층 보기와 목록 보기를 다루고, 아이콘·갤러리 보기면 보기 방식을 바꾸지 않고 `NO_FILE_VIEW`로 멈춘다. 경로 입력(⇧⌘G)은 카톡 PID로 키를 보내도 먹지 않았다 — 그래서 파일은 `~/Downloads` 바로 아래에 있어야 한다(아래 복사 규칙). 이 길을 쓰면 열기 시트가 기억하는 폴더가 「다운로드」로 바뀐다.
+- **`--paste` 길(클립보드 붙여넣기, `kakao-clip-ui.js`)**: 사진 여러 장을 「사진 N장」 묶음 하나(type 27)로 보낼 때만 쓴다. 카톡이 몇 초 앞으로 온다.
+- `--paste` 순서: 클립보드를 통째로 저장 → NSPasteboard에 파일 URL·`NSFilenamesPboardType` → 카톡을 잠깐 앞으로, 그 창 AXRaise, 입력칸(`메시지 입력`) 초점 → 메뉴 「편집 → 붙여넣기」 AXPress → 확인 시트 「N개 전송」 → (사진 여러 장이면 「묶어보내기」 안내 시트 「확인」) → 쓰던 앱을 다시 앞으로 → 클립보드 되돌림. 성공은 DB의 새 행 type으로만 판정한다(사진 2, 파일 18, 여러 장 묶음 27).
+- **카톡이 맨 앞 앱일 때만** 붙여넣기가 먹는다(뒤에 있으면 아무 일도 안 한다 — 창 AXRaise·AXMain·AXFocused로도, ⌘V를 카톡 PID에만 보내도 안 됨, 2026-11-18 다시 확인). 그래서 몇 초 앞으로 띄우고, 끝나면 원래 맨 앞 앱(PID로 비교)과 원래 클립보드(모든 항목·종류)를 되돌린다. 출력 JSON의 `clipRestored`·`clipTextSame`으로 확인한다.
+- 두 길 모두 `~/Downloads` 아래 파일만 쓴다(붙여넣기는 외장 디스크 경로를 「존재하지 않는 항목」으로 본다). 그래서 `kakao-send.py`가 다른 곳의 파일을 **같은 이름으로 `~/Downloads`에 잠깐 복사**하고 끝나면 지운다. 이름을 바꾸지 않는 것은 받는 사람에게 파일 이름이 그대로 보이기 때문이다. `NOT_IN_DB`면 복사본을 남겨 두고 경로를 알려 준다.
+- `--paste`에서는 같은 종류(`--photo`끼리, `--attach`끼리)가 이어지면 한 번에 붙인다.
+- `파일전송`·`다운로드`·`열기`·`편집`·`붙여넣기`(또는 `Paste`)·`메시지 입력`·`취소`·`N개 전송`·`확인`은 한국어 UI에서 확인한 이름이다.
 
 ### 8-2. 닫힌 창 열기 — `kakao-open-ui.js` (`--open`, `--open-only`)
 
-- 순서(실측): 메뉴 「창 → 채팅」 AXPress(본창을 채팅 탭으로) → 본창 목록에서 첫 글자칸이 창 제목과 같은 줄을 찾는다(없으면 목록을 다른 쪽으로 바꿔 한 번 더) → 그 줄 셀에 `AXShowMenu` → 「채팅방 열기」 AXPress → 그 제목의 창이 생겼는지 확인 → 목록을 바꿨으면 처음 쪽으로 되돌린다. 키·마우스·클립보드를 쓰지 않고 카톡을 앞으로 띄우지 않는다.
+- 순서(실측): 메뉴 「창 → 채팅」 AXPress(본창을 채팅 탭으로) → 본창 목록에서 첫 글자칸이 창 제목과 같은 줄을 찾는다(없으면 목록을 다른 쪽으로 바꿔 한 번 더) → **그 줄을 선택하고 Return을 카톡 PID에만 보낸다**(목록에서 한 번 클릭 → Return과 같은 길) → 그 제목의 창이 생겼는지 확인 → 목록을 바꿨으면 처음 쪽으로 되돌린다. 마우스·클립보드를 쓰지 않고 카톡을 앞으로 띄우지 않는다.
+- **줄 찾기는 목록을 다 읽지 않는다.** 느린 것은 카톡이 화면 밖 줄 내용을 내주는 쪽이다(655줄 이름을 다 읽으면 System Events로도 직접 AX로도 약 80초, 줄 하나는 화면 안 0.03초·화면 밖 0.1~0.4초). 그래서 `kakao-send.py`가 DB로 그 방의 줄 번호를 짐작해 6번째 인자 `near`로 넘기고, 스크립트는 그 근처(위아래 20줄까지)만 한 줄씩 읽는다. 근처에 없으면 예전처럼 다 읽는다. 본창 목록 순서(2026-11-18 앱 목록과 DB 대조): 묶음 줄(조용한 채팅방 type 10000, 댓글 모아보기 10001) → 상단 고정 방(`pin` 0 이상, 큰 값 먼저) → 나머지는 `NTChatRoom.lastUpdatedAt` 내림차순, 「안 읽은 방 먼저」 정렬이면 안 읽은 글이 있는 방이 그 안에서 먼저. 이 정렬 설정 값은 DB 설정 표(`NTSetting`)에 없어서 두 경우의 줄 번호를 둘 다 넘긴다(출력 `near.guess`). `vtype = 1`인 방은 본창 목록에 없다 — 조용한 채팅방이나 오픈프로필 묶음(type 9999, linkId가 같은 type 3 방들) 안에 들어 있어, `kakao-send.py --open`은 `ROOM_IN_FOLDER`로 바로 멈춘다.
+- **우클릭 메뉴(`AXShowMenu` → 「채팅방 열기」)는 차선책이다.** 메뉴를 띄우는 순간 카톡 본창이 사용자가 보던 창 위로 올라온다(2026-11-18 창 순서를 0.04초 간격으로 기록). 줄 선택 → Return은 Ghostty·Aside가 맨 앞일 때 보던 창이 맨 위 그대로였고 새 채팅 창은 그 창 바로 아래에 생겼다(Aside Computer Use로 열었을 때와 같다). Discord가 맨 앞일 때는 카톡 본창과 새 창이 그 위로 올라온 적이 있다 — 그래서 어느 길이든 끝나는 순간 화면 맨 위 창이 카톡 것이면, 그 순간 맨 앞 앱의 초점 창을 `AXRaise`로 다시 맨 위에 올린다(출력 `frontRaised`, 카톡이 맨 앞 앱이면 하지 않는다). 시작할 때 창을 잡아 두었다가 올리면, 그사이 사용자가 앱을 바꾼 경우 낡은 창이 올라가 도리어 보던 창을 가린다(같은 날 실측) — 그래서 끝나는 순간의 상태로만 판단한다. Return은 선택된 줄이 그 방 하나이고 본창이 카톡의 주 창이며 초점이 본창 목록에 있을 때만 보낸다 — PID로 보낸 키는 그 앱의 주 창·초점 요소로 가서, 채팅 창 입력칸에 들어가면 치던 글이 보내질 수 있다. 확인이 안 되면 키를 보내지 않고 우클릭 메뉴 길로 넘어간다(출력 `how: "menu"`, `returnSkipped`). 화면 밖 줄도 선택은 되므로 Return 길에는 스크롤이 필요 없다.
 - **카톡 설정 「오픈채팅 목록 분리」(설정 > 채팅 > 채팅방 관리)에 따라 본창 목록 모양이 다르다.** 값은 DB `NTSetting`의 `openchatlist_issperated`(카톡 철자 그대로, `boolValue` 1=분리) — 2026-11-18 설정을 끄자 이 값이 0이 되고 `updatedRefAt`이 누른 시각으로 바뀌었다. 앱 plist에는 없다. 꺼져 있으면 채팅 탭에 「오픈채팅」 단추가 없고 한 목록에 다 있다(실측 704줄 = 채팅 655 + 오픈채팅 49) — 바꿀 것이 없다(출력 `listSide: "none"`).
 - **분리가 켜져 있으면 「채팅」·「오픈채팅」 두 쪽 중 한쪽만 보인다.** 「창 → 채팅」은 채팅 탭으로만 옮기고 지금 보이는 쪽은 그대로 두어, 오픈채팅 쪽(한 기기 49줄)일 때는 1:1·일반방·나와의 채팅 줄이 없다(예전 판은 여기서 `NOT_IN_LIST`로 멈췄다). 그래서 그 방 쪽부터 찾고, 없으면 본창의 `AXButton 채팅`·`AXButton 오픈채팅` 중 다른 쪽을 AXPress해 다시 찾는다. 그 방 쪽은 `kakao-send.py`가 `--chat-id`의 `NTChatRoom.linkId`(0보다 크면 오픈채팅)로 정해 5번째 인자 `side`로 넘긴다(env에 열쇠가 있을 때만, 없으면 지금 쪽부터). 목록을 한 번에 읽어도 느리다(2026-11-18 실측: 655줄 약 83초, 49줄 수 초 — 첫 글자칸만 `staticTexts[0]`으로 읽으면 더 느려 2분 뒤 AppleEvent 시간 초과). 그래서 줄이 있는데 이름이 없으면 두 번만 읽고 그쪽엔 없다고 본다(예전엔 12번 읽어 49줄에서도 85초). `kakao-send.py`는 창 열기를 240초까지 기다린다(예전 90초는 655줄에서 `UI_TIMEOUT`).
 - 누르기 전에 스크롤이 멈췄는지(줄 y를 0.3초 간격으로 두 번 읽어 같은지, 아니면 `ROW_NOT_SETTLED`)와 그 자리 줄 이름이 여전히 창 제목인지(아니면 `ROW_MOVED` — 새 글이 오면 목록 순서가 바뀐다) 다시 본다. 눌렀는데 그 제목 창 대신 다른 창이 생기면 `OPENED_OTHER_WINDOW`와 그 창 이름(`other`)을 낸다 — 2026-11-18 704줄 목록 시험에서 나와의 채팅을 열려다 다른 오픈채팅 창이 뜨고 그 제목 창은 안 열린 일이 한 번 있었다(같은 때 다른 프로그램도 본창을 읽고 있어 원인은 가리지 못했다). 그 방은 읽음 처리됐을 수 있으니 보고에 적는다. 보이는 쪽은 목록 이름 옆 ▼ 그림(`AXImage` 설명 `common icon triangledown dark`)의 x가 「오픈채팅」 단추 x보다 크면 오픈채팅이다(실측 채팅 127·오픈채팅 211, 단추 152). **단추의 AXHelp 「채팅 목록 전환」은 목록을 바꿔도 그대로 남을 때가 있어 판정에 쓰지 않는다**(2026-11-18 실측: 목록은 0.3초 안에 바뀌었는데 도움말은 어느 쪽이든 「오픈채팅」 단추에 붙어 있었다). 출력 `listSide`(처음 쪽)·`listSwitched`(바꾼 쪽)·`listRestored`(되돌렸는지). 바꾼 뒤 ▼가 옮겨 가지 않으면 `LIST_NOT_SWITCHED`. ▼ 설명의 `dark`는 어두운 화면에서 본 값이라 스크립트는 `common icon triangledown`으로 시작하는지만 본다.
-- 목록 줄 글자는 `list.rows.uiElements[0].staticTexts.value()`로 **한 번에** 읽는다(줄마다 읽으면 수백 줄에 수십 초).
-- **화면 밖 줄에는 `AXShowMenu`가 아무 반응이 없다**(본창이 작으면 아래쪽 줄이 화면 밖이다). 세로 스크롤 막대 `value`(0=맨 위, 1=맨 아래)를 계산해 그 줄을 가운데로 옮긴 뒤 연다. **표가 32767px(74px 줄로 약 440줄)를 넘으면 AX가 주는 y·높이가 16비트로 접혀 나온다**(2026-11-18 704줄 목록: 표 높이 -13438, 마지막 줄 y -13162 — 진짜 값에서 65536을 뺀 값). 예전 판은 이걸 「막대 값과 표 높이가 비례하지 않는다」로 보고 막대를 0에 둔 채 `ROW_HIDDEN_AFTER_SCROLL`로 멈췄다. 지금은 표 높이를 마지막 줄 아래 끝으로 재고 두 좌표의 차이를 65536으로 펴서 계산한다(표가 65536px, 약 885줄을 넘으면 다시 틀린다). 첫 계산이 빗나가면 방금 움직인 거리로 다시 옮긴다(최대 8번, 넘으면 `ROW_HIDDEN_AFTER_SCROLL`). 출력의 `scrolled: true`가 그 경우다.
+- 목록을 다 읽어야 할 때(줄 번호 짐작이 빗나갔을 때)는 `list.rows.uiElements[0].staticTexts.value()`로 **한 번에** 읽는다(줄마다 따로 전부 읽으면 더 느리다).
+- **화면 밖 줄에는 `AXShowMenu`가 아무 반응이 없다** — 아래 스크롤 계산은 우클릭 메뉴 길에서만 쓴다(본창이 작으면 아래쪽 줄이 화면 밖이다). 세로 스크롤 막대 `value`(0=맨 위, 1=맨 아래)를 계산해 그 줄을 가운데로 옮긴 뒤 연다. **표가 32767px(74px 줄로 약 440줄)를 넘으면 AX가 주는 y·높이가 16비트로 접혀 나온다**(2026-11-18 704줄 목록: 표 높이 -13438, 마지막 줄 y -13162 — 진짜 값에서 65536을 뺀 값). 예전 판은 이걸 「막대 값과 표 높이가 비례하지 않는다」로 보고 막대를 0에 둔 채 `ROW_HIDDEN_AFTER_SCROLL`로 멈췄다. 지금은 표 높이를 마지막 줄 아래 끝으로 재고 두 좌표의 차이를 65536으로 펴서 계산한다(표가 65536px, 약 885줄을 넘으면 다시 틀린다). 첫 계산이 빗나가면 방금 움직인 거리로 다시 옮긴다(최대 8번, 넘으면 `ROW_HIDDEN_AFTER_SCROLL`). 출력의 `scrolled: true`가 그 경우다.
 - **같은 이름 줄이 둘이면 `AMBIGUOUS`로 멈춘다.** 흔한 경우는 나와의 채팅 — 줄 이름이 내 이름이라 내 오픈프로필 줄과 겹친다. 줄의 배지 이미지 설명이 나와의 채팅은 `badge me`, 오픈채팅은 `badge openchat room`이라 `--open-hint "badge me"`로 고른다. 힌트는 줄 미리보기 글(줄 안 `textArea`)에도 맞춰 본다.
 - 오픈프로필로 온 1:1 대화는 본창 줄 이름이 내 오픈프로필 이름이고, 그 줄의 「채팅방 열기」는 대화 창이 아니라 제목 없는 「오픈프로필 대화 목록」 창을 연다. 진짜 대화 창 제목은 상대 이름이다. 이때는 `kakao-open-ui.js <상대 이름> open "" <내 오픈프로필 이름>`(4번째 인자 via)으로 목록 창을 거쳐 연다(이 판에서는 따로 시험하지 않았다).
 - **창을 열면 그 방의 안 읽은 글이 읽음 처리된다**(상대 화면의 숫자 1이 사라진다). 남의 1:1 방을 시험으로 열지 않는다.
@@ -427,6 +439,18 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file
 - DB 확인은 그 앱 계정의 DB여야 한다 — `KAKAO_DB_KEY`·`KAKAO_DB_PATH`·`KAKAO_USER_ID`를 그 계정 값으로 준다(§7). 복제한 앱은 컨테이너 경로가 달라 DB 경로도 다르다.
 - 시험 전송은 그 계정의 나와의 채팅에만 한다(남에게 안 나간다). 다른 방은 `--dry-run`과 이미 열린 창까지만.
 
+### 8-6. 카카오 이모티콘 — `--emoticon <path>` (`kakao-emoticon-ui.js` + `aside_cu.py`)
+
+- `path`는 DB 이모티콘 글(`type` 6·12·20·25)의 `attachment.path` 그대로다: `<상품번호>.emot_<순번>.<확장자>`(예 `2222021.emot_003.png`). 작은 그림은 `https://item.kakaocdn.net/dw/<상품번호>.thum_<순번>.png`(PNG 210×210)로 받을 수 있다.
+- 순서: 채팅 창의 「이모티콘 ⌘E」 AXPress로 이모티콘 창을 연다 → 그 상품의 탭을 고른다 → 순번 칸을 누른다 → 채팅 창 「전송」 AXPress → DB 새 글의 path가 요청과 같은지 본다(`EMOTICON_OK`) → 이모티콘 창을 닫는다.
+- **탭·칸을 누르는 것만 Aside Computer Use로 한다.** 이모티콘 창의 탭·칸에는 접근성 누르기 동작이 없고, 격자의 `AXSelectedChildren`을 바꾸면 선택 표시만 될 뿐 입력칸에 붙지 않는다. 카톡 PID로 보낸 마우스 클릭·Return도 뒤에 있는 창에서는 먹지 않았다(2026-11-18 캡처로 확인). `aside_cu.py`가 `aside mcp --computer-use --app <번들 ID>`를 띄워 repl 도구로 `app.click(<요소 번호>)`를 부른다 — 모델을 거치지 않고, 맨 앞 앱·창 순서는 그대로였다. 필요한 것: Aside 앱과 CLI, Computer Use 켜짐(`aside settings computer-use enable`). 없으면 `FAIL ASIDE_…`.
+- Aside는 화면이 바뀌면 앞서 받은 요소 번호를 거절하고(「That element changed since your last state」), 화면 밖 요소는 누르지 않는다(「no visible click bounds」). 그래서 누를 때마다 상태를 새로 읽고, 탭 줄은 「다음」·「이전」 단추로 넘기고, 격자는 스크롤 막대 값으로 내린다.
+- **탭에는 이름이 없다.** 카톡이 지금 고른 탭의 상품번호를 DB `NTSetting`의 `emoticon.selecteditemid`에 바로 적으므로, 탭을 하나씩 누르며 그 값이 원하는 상품번호가 될 때까지 찾는다. 찾은 만큼 `~/.cache/kakaocli-skill/emoticon-tabs.json`에 적어 다음부터 바로 간다(탭 27개를 처음 다 훑을 때 약 22초, 표가 있으면 보내기까지 5.8초). 이모티콘 목록이 바뀌면 `emoticon_keyboard_revision`이 바뀌어 다시 찾는다. 이 맥 이모티콘 창에 없는 상품(폰에서만 쓴 것, 기간이 끝난 것)은 `EMOTICON_ITEM_NOT_OWNED`.
+- **격자 칸 순서 = 이모티콘 순번**(셋째 칸 = `emot_003`, DB로 확인). 격자는 보이는 칸 근처만 접근성 트리에 올리므로(처음 20칸) 스크롤하면 「트리의 몇 번째 칸」과 순번이 어긋난다. `kakao-emoticon-ui.js <창 제목> cells [스크롤 값]`이 칸마다 실제 번호(`AXIndex`)와 화면 안에 있는지를 읽고, 원하는 번호가 보일 때만 그 자리의 칸을 누른다(순번 22번은 12.3초).
+- 입력칸에 글이 있거나(`BOX_NOT_EMPTY`) 이미 붙은 사진·이모티콘이 있으면(`ALREADY_ATTACHED` — 입력칸이 비었는데 「전송」이 켜져 있다) 시작하지 않는다. `--dry-run`은 탭과 칸을 찾는 데까지만 하고 누르지 않는다.
+- Aside는 MCP 서버마다 대화 목록에 「Aside CLI Computer Use」 세션을 하나 남긴다 — `aside_cu.py`가 끝날 때 이번에 새로 생긴 세션을 보관(archive)한다.
+- `이모티콘`·`미니 이모티콘`·`다음`·`이전`과 Aside가 찍는 역할 이름(`스크롤 영역`·`이미지`·`스크롤 막대`·`버튼`)은 한국어 화면에서 확인한 값이다.
+
 ---
 
 ## 점검
@@ -444,6 +468,7 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file
 - [ ] 큰 ID를 JS로 받는다면 `CAST(... AS TEXT)`로 받았는가, 보내는 중 임시 줄(`logId` INT64 최대)을 뺐는가(§5)
 - [ ] 보낼 때 창이 열려 있고 입력칸이 비었는가, 실제 전송에 `--send`를 붙였는가, 처음이면 `--dry-run`부터, 성공은 `SENT_OK`(DB 확인)로만 판단했는가, 글은 `CONTENT SAME`까지 봤고 보낼 파일을 직전에 새로 썼는가(§8)
 - [ ] 사진·파일은 `--photo`·`--attach`로 보냈는가(`--file`은 글), 시험 전송은 나와의 채팅에만 했는가(§8-1)
+- [ ] 이모티콘은 `EMOTICON_OK`(DB path가 요청과 같음)로 판단했는가, Aside Computer Use가 켜져 있는가(§8-6)
 - [ ] 창을 열기 전에 그 방이 남의 1:1 방이 아닌지 봤는가(열면 읽음 처리된다), 같은 이름 줄은 `--open-hint`로 골랐는가(§8-2)
 - [ ] 답장은 `REPLY_OK`(DB 연결)로, 멘션은 `MENTION_OK`(DB mentions)로 판단했는가 — 「@이름」 글자를 붙여 넣지 않았는가(§8-3·8-4)
 - [ ] 카톡을 둘 띄웠다면 `--bundle-id`·`--pid`와 그 계정 DB 값을 맞췄는가(§8-5)
