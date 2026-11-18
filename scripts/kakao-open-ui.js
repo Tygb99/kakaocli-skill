@@ -170,8 +170,20 @@ function run(argv) {
       if (!bar) return done({ step: 'ROW_HIDDEN_NO_SCROLLBAR' });
       const span = list.size()[1] - sa.size()[1];
       const off = row.position()[1] - list.position()[1] - sa.size()[1] / 2 + row.size()[1] / 2;
-      bar.value = Math.min(1, Math.max(0, off / span));
-      if (!waitFor(visible, 12)) return done({ step: 'ROW_HIDDEN_AFTER_SCROLL' });
+      const clamp = (v) => Math.min(1, Math.max(0, v));
+      // 목록이 길면(수백 줄) 막대 값과 표 높이가 비례하지 않아 첫 계산이 빗나간다(2026-11-18 655줄 실측).
+      // kakao-reply-ui.js처럼 방금 움직인 거리(표 y 변화 ÷ 막대 값 변화)로 남은 거리를 나눠 최대 8번 다시 옮긴다.
+      let prevV = Number(bar.value()), prevY = list.position()[1];
+      bar.value = clamp(off / span);
+      for (let i = 0; i < 8 && !waitFor(visible, 4); i++) {
+        const nowV = Number(bar.value()), nowY = list.position()[1];
+        const perUnit = nowV !== prevV ? (prevY - nowY) / (nowV - prevV) : 0;
+        if (!perUnit) break;
+        const miss = row.position()[1] + row.size()[1] / 2 - (sa.position()[1] + sa.size()[1] / 2);
+        prevV = nowV; prevY = nowY;
+        bar.value = clamp(nowV + miss / perUnit);
+      }
+      if (!waitFor(visible, 4)) return done({ step: 'ROW_HIDDEN_AFTER_SCROLL' });
       out.scrolled = true;
     }
 
