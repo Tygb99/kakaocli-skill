@@ -3,7 +3,7 @@
 //  check : 확인 시트 「1개 전송」까지 가서 「취소」를 누른다(보내지 않는다)
 //  send  : 확인 시트의 「1개 전송」을 누른다
 // 순서: 「파일전송 ⌘O」 AXPress → 열기 시트(채팅 창에 붙는 시트라 사용자가 보던 창을 가리지 않는다) → 사이드바 「다운로드」 선택
-//   → 그 이름의 파일을 찾아 연다(계층 보기는 항목의 AXOpen, 목록 보기는 줄 선택 뒤 「열기」) → 확인 시트 「1개 전송」.
+//   → 그 이름의 파일을 골라 「열기」(계층 보기는 AX C API로 그 열의 AXSelectedChildren, 목록 보기는 줄 선택) → 확인 시트 「1개 전송」.
 // 열기 시트는 마지막에 쓴 폴더·보기 방식으로 열린다(2026-11-18: 다운로드가 아닌 폴더·계층 보기로 열려, 목록 보기만 찾던 옛 판이 NO_LIST_VIEW로 멈췄다).
 // 경로 입력(⇧⌘G)은 카톡 PID로 키를 보내도 먹지 않는다 — 그래서 파일은 ~/Downloads 바로 아래에 있어야 한다(kakao-send.py가 복사하고 지운다).
 // 한 번에 하나만 보낸다. 사진 여러 장을 「사진 N장」 묶음 하나로 보내려면 kakao-clip-ui.js(클립보드 붙여넣기 — 카톡이 몇 초 앞으로 온다).
@@ -74,6 +74,47 @@ function rowName(row) {
   } catch (e) { return ''; }
 }
 
+// 계층 보기 항목은 System Events로 고를 수 없다(AXSelected 속성이 없고, 목록의 AXSelectedChildren은 「유형을 변경할 수 없습니다」).
+// 그래서 AX C API로 그 열 목록의 AXSelectedChildren을 그 항목으로 바꾼다(2026-11-23 실측: 오류 값은 -25205로 돌아와도 실제로 골라지고 「열기」가 켜진다).
+ObjC.import('ApplicationServices');
+function axGet(el, attr) { const r = Ref(); return $.AXUIElementCopyAttributeValue(el, $(attr), r) === 0 ? r[0] : null; }
+function axArr(el, attr) {
+  const v = axGet(el, attr);
+  if (!v) return [];
+  const a = ObjC.castRefToObject(v);
+  const out = [];
+  for (let i = 0; i < Number(a.count); i++) out.push(a.objectAtIndex(i));
+  return out;
+}
+function axStr(el, attr) { const v = axGet(el, attr); if (!v) return null; try { return ObjC.unwrap(ObjC.castRefToObject(v)); } catch (e) { return null; } }
+function axFindAll(el, role, depth, acc) {
+  if (depth < 0) return acc;
+  for (const k of axArr(el, 'AXChildren')) {
+    if (axStr(k, 'AXRole') === role) acc.push(k);
+    else axFindAll(k, role, depth - 1, acc);
+  }
+  return acc;
+}
+// 채팅 창(제목 title)의 열기 시트 계층 보기에서 이름이 맞는 항목을 골라 둔다. 고른 항목 수(그 열 목록의 AXSelectedChildren)를 돌려준다.
+function axSelectInColumns(pid, title, same) {
+  const app = $.AXUIElementCreateApplication(pid);
+  const win = axArr(app, 'AXWindows').find((x) => axStr(x, 'AXTitle') === title);
+  const sheet = win && axArr(win, 'AXChildren').find((x) => axStr(x, 'AXRole') === 'AXSheet');
+  const browser = sheet && axFindAll(sheet, 'AXBrowser', 5, [])[0];
+  if (!browser) return { err: 'AX_NO_BROWSER' };
+  const hits = [];
+  for (const list of axFindAll(browser, 'AXList', 4, [])) {
+    for (const g of axArr(list, 'AXChildren')) {
+      const tf = axArr(g, 'AXChildren').find((c) => axStr(c, 'AXRole') === 'AXTextField');
+      if (tf && same(axStr(tf, 'AXValue') || '')) hits.push([list, g]);
+    }
+  }
+  if (hits.length !== 1) return { err: hits.length ? 'AMBIGUOUS_FILE' : 'FILE_NOT_IN_LIST', count: hits.length };
+  const [list, g] = hits[0];
+  $.AXUIElementSetAttributeValue(list, $('AXSelectedChildren'), $.NSArray.arrayWithObject(g));
+  return { selected: axArr(list, 'AXSelectedChildren').length };
+}
+
 function waitFor(fn, tries, step) {
   for (let i = 0; i < tries; i++) { const v = fn(); if (v) return v; delay(step || 0.25); }
   return null;
@@ -136,7 +177,7 @@ function run(argv) {
     const browser = findRole(sg, 'AXBrowser', null, 3);
     const list = browser ? null : findRole(sg, 'AXOutline', '목록 보기', 4);
     if (browser) {
-      // 계층 보기: 열마다 항목(이름 글칸을 가진 묶음)이 있고, 항목의 AXOpen이 더블클릭과 같다
+      // 계층 보기: 열마다 항목(이름 글칸을 가진 묶음)이 있다 — 이름으로 찾은 뒤 골라서 「열기」를 누른다
       out.view = 'column';
       const hits = waitFor(() => {
         const found = [];
@@ -149,7 +190,14 @@ function run(argv) {
       }, 12);
       if (!hits) { cancelPanel(); return done({ step: 'FILE_NOT_IN_LIST' }); }
       if (hits.length > 1) { cancelPanel(); return done({ step: 'AMBIGUOUS_FILE', count: hits.length }); }
-      hits[0].actions.byName('AXOpen').perform();
+      // 항목의 AXOpen(더블클릭)은 먹지 않을 때가 있다(2026-11-23 1:1 방에 mp4: 같은 AXOpen이 18번 중 14번 안 됨, 확인 시트가 안 떠 NO_CONFIRM_SHEET).
+      // 사람처럼 항목을 고른 뒤 「열기」 단추를 누른다 — 고르기는 AX C API(위 axSelectInColumns).
+      const pick = axSelectInColumns(p.unixId(), title, same);
+      out.selected = pick.selected;
+      if (pick.err) { cancelPanel(); return done(Object.assign({ step: pick.err }, pick)); }
+      const openBtn = sg.buttons.byName('열기');
+      if (!waitFor(() => { try { return openBtn.enabled(); } catch (e) { return false; } }, 12)) { cancelPanel(); return done({ step: 'NOT_SELECTED' }); }
+      openBtn.actions.byName('AXPress').perform();
     } else if (list) {
       out.view = 'list';
       const row = waitFor(() => list.rows().find((r) => rowName(r).split('|').some(same)), 12);
