@@ -1,13 +1,13 @@
-// 카카오톡의 열린 채팅 창으로 사진·파일을 하나 보낸다. 마우스·키보드·클립보드를 쓰지 않고 카톡을 앞으로 띄우지 않는다(System Events 접근성만).
-// 사용: osascript -l JavaScript kakao-attach-ui.js <창 제목> <check|send> <~/Downloads 바로 아래 파일 이름>
-//  check : 확인 시트 「1개 전송」까지 가서 「취소」를 누른다(보내지 않는다)
-//  send  : 확인 시트의 「1개 전송」을 누른다
+// 카카오톡의 열린 채팅 창으로 사진·파일을 보낸다. 마우스·키보드·클립보드를 쓰지 않고 카톡을 앞으로 띄우지 않는다(접근성만).
+// 사용: osascript -l JavaScript kakao-attach-ui.js <창 제목> <check|send> <~/Downloads 바로 아래 파일 이름> [파일 이름 ...]
+//  check : 확인 시트 「N개 전송」까지 가서 「취소」를 누른다(보내지 않는다)
+//  send  : 확인 시트의 「N개 전송」을 누른다(「묶어보내기」 안내 시트가 뜨면 「확인」)
+// 이름을 여러 개 주면 열기 시트에서 한 번에 함께 고른다 — 사진 여러 장은 「사진 N장」 묶음 하나(type 27)로 간다.
 // 순서: 「파일전송 ⌘O」 AXPress → 열기 시트(채팅 창에 붙는 시트라 사용자가 보던 창을 가리지 않는다) → 사이드바 「다운로드」 선택
 //   → 그 이름의 파일을 골라 「열기」(계층 보기는 AX C API로 그 열의 AXSelectedChildren, 목록 보기는 줄 선택) → 확인 시트 「1개 전송」.
 // 열기 시트는 마지막에 쓴 폴더·보기 방식으로 열린다(2026-11-18: 다운로드가 아닌 폴더·계층 보기로 열려, 목록 보기만 찾던 옛 판이 NO_LIST_VIEW로 멈췄다).
 // 경로 입력(⇧⌘G)은 카톡 PID로 키를 보내도 먹지 않는다 — 그래서 파일은 ~/Downloads 바로 아래에 있어야 한다(kakao-send.py가 복사하고 지운다).
-// 한 번에 하나만 보낸다. 사진 여러 장을 「사진 N장」 묶음 하나로 보내려면 kakao-clip-ui.js(클립보드 붙여넣기 — 카톡이 몇 초 앞으로 온다).
-// 창·버튼 이름(파일전송, 다운로드, 열기, 취소, 1개 전송)은 한국어 UI에서 확인한 값이다.
+// 창·버튼 이름(파일전송, 다운로드, 열기, 취소, N개 전송, 확인)은 한국어 UI에서 확인한 값이다.
 // 대상 앱: 환경변수 KAKAO_BUNDLE_ID(기본 com.kakao.KakaoTalkMac), KAKAO_PID(있으면 그 PID 하나만, 번들 ID가 다르면 멈춤).
 // 출력: 한 줄 JSON {ok, step, view, front0, front1, ...}. 실제 전송 성공 판정은 이 출력이 아니라 DB의 새 행 type.
 ObjC.import('Foundation');
@@ -95,24 +95,61 @@ function axFindAll(el, role, depth, acc) {
   }
   return acc;
 }
-// 채팅 창(제목 title)의 열기 시트 계층 보기에서 이름이 맞는 항목을 골라 둔다. 고른 항목 수(그 열 목록의 AXSelectedChildren)를 돌려준다.
-function axSelectInColumns(pid, title, same) {
+function axSheet(pid, title) {
   const app = $.AXUIElementCreateApplication(pid);
   const win = axArr(app, 'AXWindows').find((x) => axStr(x, 'AXTitle') === title);
-  const sheet = win && axArr(win, 'AXChildren').find((x) => axStr(x, 'AXRole') === 'AXSheet');
+  return win && axArr(win, 'AXChildren').find((x) => axStr(x, 'AXRole') === 'AXSheet');
+}
+function nsArray(items) {
+  const a = $.NSMutableArray.array;
+  for (const x of items) a.addObject(x);
+  return a;
+}
+// 이름마다 맞는 것이 정확히 하나여야 한다. picks[i] = [부모, 항목] 또는 오류.
+function pickEach(candidates, sames) {
+  const picks = [];
+  for (const same of sames) {
+    const hits = candidates.filter(([, , name]) => same(name));
+    if (hits.length !== 1) return { err: hits.length ? 'AMBIGUOUS_FILE' : 'FILE_NOT_IN_LIST', count: hits.length, index: picks.length };
+    picks.push(hits[0]);
+  }
+  return { picks };
+}
+// 채팅 창(제목 title)의 열기 시트 계층 보기에서 이름이 맞는 항목들을 함께 골라 둔다. 고른 항목 수(그 열 목록의 AXSelectedChildren)를 돌려준다.
+// 여러 개를 한 배열로 넣으면 한 번에 여러 개가 골라진다(2026-11-24 실측, 도리 카톡 나와의 채팅).
+function axSelectInColumns(pid, title, sames) {
+  const sheet = axSheet(pid, title);
   const browser = sheet && axFindAll(sheet, 'AXBrowser', 5, [])[0];
   if (!browser) return { err: 'AX_NO_BROWSER' };
-  const hits = [];
+  const cands = [];
   for (const list of axFindAll(browser, 'AXList', 4, [])) {
     for (const g of axArr(list, 'AXChildren')) {
       const tf = axArr(g, 'AXChildren').find((c) => axStr(c, 'AXRole') === 'AXTextField');
-      if (tf && same(axStr(tf, 'AXValue') || '')) hits.push([list, g]);
+      if (tf) cands.push([list, g, axStr(tf, 'AXValue') || '']);
     }
   }
-  if (hits.length !== 1) return { err: hits.length ? 'AMBIGUOUS_FILE' : 'FILE_NOT_IN_LIST', count: hits.length };
-  const [list, g] = hits[0];
-  $.AXUIElementSetAttributeValue(list, $('AXSelectedChildren'), $.NSArray.arrayWithObject(g));
+  const r = pickEach(cands, sames);
+  if (r.err) return r;
+  const list = r.picks[0][0];
+  if (r.picks.some(([l]) => l !== list)) return { err: 'FILES_IN_DIFFERENT_COLUMNS' };
+  $.AXUIElementSetAttributeValue(list, $('AXSelectedChildren'), nsArray(r.picks.map(([, g]) => g)));
   return { selected: axArr(list, 'AXSelectedChildren').length };
+}
+// 목록 보기에서 여러 줄을 함께 고른다(System Events의 AXSelectedRows 설정은 무시됐다 — 2026-10-18). AX C API로 AXSelectedRows를 바꾼다.
+function axSelectRows(pid, title, sames) {
+  const sheet = axSheet(pid, title);
+  const list = sheet && axFindAll(sheet, 'AXOutline', 6, []).find((o) => axStr(o, 'AXDescription') === '목록 보기');
+  if (!list) return { err: 'AX_NO_LIST' };
+  const cands = [];
+  for (const row of axArr(list, 'AXRows')) {
+    const cell = axArr(row, 'AXChildren')[0];
+    const names = cell ? axArr(cell, 'AXChildren').map((e) => String(axStr(e, 'AXValue') || axStr(e, 'AXTitle') || '')) : [];
+    for (const nm of names) if (nm) cands.push([list, row, nm]);
+  }
+  const r = pickEach(cands, sames);
+  if (r.err) return r;
+  $.AXUIElementSetAttributeValue(list, $('AXSelectedRows'), nsArray(r.picks.map(([, row]) => row)));
+  return { selected: axArr(list, 'AXSelectedRows').length };
 }
 
 function waitFor(fn, tries, step) {
@@ -121,7 +158,7 @@ function waitFor(fn, tries, step) {
 }
 
 function run(argv) {
-  const [title, mode, name] = argv;
+  const [title, mode, ...names] = argv;
   const se = Application('System Events');
   const out = { ok: false, step: '', front0: frontName(se) };
   let app = null;
@@ -132,7 +169,10 @@ function run(argv) {
     return JSON.stringify(out);
   };
   if (mode !== 'check' && mode !== 'send') return done({ step: 'BAD_MODE' });
-  if (!name || argv.length !== 3) return done({ step: 'ONE_FILE_ONLY' });
+  if (!names.length || names.some((x) => !x)) return done({ step: 'NO_FILES' });
+  const nfc = (s) => String(s).normalize('NFC');
+  if (new Set(names.map(nfc)).size !== names.length) return done({ step: 'DUPLICATE_FILES' });
+  out.n = names.length;
   let p;
   try {
     const k = kakaoProcess(se);
@@ -171,39 +211,45 @@ function run(argv) {
 
     phase = 'file';
     // 확장자를 숨기는 설정이면 이름이 확장자 없이 보인다 — 둘 다 맞춰 본다
-    const nfc = (s) => String(s).normalize('NFC');
-    const bare = name.replace(/\.[^.]+$/, '');
-    const same = (v) => nfc(v) === nfc(name) || nfc(v) === nfc(bare);
+    const sameAs = (name) => { const bare = name.replace(/\.[^.]+$/, ''); return (v) => nfc(v) === nfc(name) || nfc(v) === nfc(bare); };
+    const sames = names.map(sameAs);
+    const same = sames[0];
     const browser = findRole(sg, 'AXBrowser', null, 3);
     const list = browser ? null : findRole(sg, 'AXOutline', '목록 보기', 4);
     if (browser) {
       // 계층 보기: 열마다 항목(이름 글칸을 가진 묶음)이 있다 — 이름으로 찾은 뒤 골라서 「열기」를 누른다
       out.view = 'column';
-      const hits = waitFor(() => {
-        const found = [];
+      // 목록이 다 그려질 때까지 이름이 모두 보이기를 기다린다
+      const shown = waitFor(() => {
+        const vals = [];
         for (const col of browser.scrollAreas[0].scrollAreas()) {
-          let names = [];
-          try { names = col.lists[0].groups.textFields[0].value(); } catch (e) { continue; }
-          names.forEach((v, i) => { if (same(v)) found.push(col.lists[0].groups[i]); });
+          try { vals.push(...col.lists[0].groups.textFields[0].value()); } catch (e) { continue; }
         }
-        return found.length ? found : null;
+        return sames.every((s) => vals.some(s)) ? true : null;
       }, 12);
-      if (!hits) { cancelPanel(); return done({ step: 'FILE_NOT_IN_LIST' }); }
-      if (hits.length > 1) { cancelPanel(); return done({ step: 'AMBIGUOUS_FILE', count: hits.length }); }
+      if (!shown) { cancelPanel(); return done({ step: 'FILE_NOT_IN_LIST' }); }
       // 항목의 AXOpen(더블클릭)은 먹지 않을 때가 있다(2026-11-23 1:1 방에 mp4: 같은 AXOpen이 18번 중 14번 안 됨, 확인 시트가 안 떠 NO_CONFIRM_SHEET).
       // 사람처럼 항목을 고른 뒤 「열기」 단추를 누른다 — 고르기는 AX C API(위 axSelectInColumns).
-      const pick = axSelectInColumns(p.unixId(), title, same);
+      const pick = axSelectInColumns(p.unixId(), title, sames);
       out.selected = pick.selected;
       if (pick.err) { cancelPanel(); return done(Object.assign({ step: pick.err }, pick)); }
+      if (pick.selected !== names.length) { cancelPanel(); return done({ step: 'NOT_ALL_SELECTED' }); }
       const openBtn = sg.buttons.byName('열기');
       if (!waitFor(() => { try { return openBtn.enabled(); } catch (e) { return false; } }, 12)) { cancelPanel(); return done({ step: 'NOT_SELECTED' }); }
       openBtn.actions.byName('AXPress').perform();
     } else if (list) {
       out.view = 'list';
-      const row = waitFor(() => list.rows().find((r) => rowName(r).split('|').some(same)), 12);
-      if (!row) { cancelPanel(); return done({ step: 'FILE_NOT_IN_LIST' }); }
-      // 줄 선택이 한 번에 안 먹을 때가 있다(2026-10-24 실측) — 3번까지 다시 고른다
-      if (!waitFor(() => { row.selected = true; delay(0.3); return row.selected(); }, 3, 0.2)) { cancelPanel(); return done({ step: 'NOT_SELECTED' }); }
+      if (!waitFor(() => sames.every((s) => list.rows().some((r) => rowName(r).split('|').some(s))), 12)) { cancelPanel(); return done({ step: 'FILE_NOT_IN_LIST' }); }
+      if (names.length === 1) {
+        const row = list.rows().find((r) => rowName(r).split('|').some(same));
+        // 줄 선택이 한 번에 안 먹을 때가 있다(2026-10-24 실측) — 3번까지 다시 고른다
+        if (!waitFor(() => { row.selected = true; delay(0.3); return row.selected(); }, 3, 0.2)) { cancelPanel(); return done({ step: 'NOT_SELECTED' }); }
+      } else {
+        const pick = waitFor(() => { const r = axSelectRows(p.unixId(), title, sames); delay(0.3); return r.err || r.selected === names.length ? r : null; }, 3, 0.2);
+        out.selected = pick ? pick.selected : 0;
+        if (!pick) { cancelPanel(); return done({ step: 'NOT_ALL_SELECTED' }); }
+        if (pick.err) { cancelPanel(); return done(Object.assign({ step: pick.err }, pick)); }
+      }
       sg.buttons.byName('열기').actions.byName('AXPress').perform();
     } else {
       // 아이콘 보기·갤러리 보기는 아직 다루지 않는다 — 보기 방식을 바꾸지 않고 멈춘다
@@ -212,7 +258,7 @@ function run(argv) {
     }
 
     phase = 'confirm';
-    const want = '1개 전송';
+    const want = names.length + '개 전송';
     const confirm = waitFor(() => {
       if (!w.sheets.length) return null;
       try { const b = w.sheets[0].buttons.name(); return b.indexOf(want) >= 0 || (b.indexOf('취소') >= 0 && b.indexOf('열기') < 0 && !w.sheets[0].uiElements[0].popUpButtons.length) ? b : null; } catch (e) { return null; }
@@ -228,6 +274,20 @@ function run(argv) {
       return done({ ok: confirm.indexOf(want) >= 0 && closed, step: confirm.indexOf(want) >= 0 ? 'CHECK_OK' : 'COUNT_MISMATCH', sheetClosed: closed });
     }
     try { sheet.buttons.byName(want).actions.byName('AXPress').perform(); } catch (e) { /* 카톡은 AXPress에 오류를 내도 실제로 보낸다 — DB로 확인 */ }
+    if (names.length > 1) {
+      // 사진 여러 장이면 「묶어보내기」 안내 시트(단추 「확인」 하나)가 뜰 때가 있다 — kakao-clip-ui.js와 같이 「확인」
+      for (let i = 0; i < 8; i++) {
+        delay(0.25);
+        if (!w.sheets.length) continue;
+        let b = []; try { b = w.sheets[0].buttons.name(); } catch (e) {}
+        if (b.length === 1 && b[0] === '확인') {
+          try { out.bundleSheet = w.sheets[0].staticTexts.value().slice(0, 2); } catch (e) {}
+          w.sheets[0].buttons.byName('확인').actions.byName('AXPress').perform();
+          out.bundleConfirmed = true;
+          break;
+        }
+      }
+    }
     delay(0.5);
     return done({ ok: true, step: 'PRESSED', sheetClosed: !w.sheets.length });
   } catch (e) {

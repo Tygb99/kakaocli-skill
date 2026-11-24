@@ -47,7 +47,7 @@ ln -s ~/skills/kakaocli-skill ~/.claude/skills/kakaocli-skill     # Claude Code.
 | `derive-key.py` | Device UUID + user ID → DB 열쇠 |
 | `kakao_db.py` | env의 열쇠·DB 경로로 빠른 질의 (모듈·명령 겸용) |
 | `kakao-send.py` + `kakao-send-ui.js` | 채팅 창으로 글·사진·파일·이모티콘을 보내고 DB로 확인 |
-| `kakao-attach-ui.js` | 사진·파일 하나를 「파일전송」 단추로 뒤에서 보내기(`--photo`·`--attach` 기본 길) |
+| `kakao-attach-ui.js` | 사진·파일을 「파일전송」 단추로 뒤에서 보내기(`--photo`·`--attach` 기본 길). 이름을 여러 개 주면 함께 골라 「사진 N장」 묶음 하나로 |
 | `kakao-clip-ui.js` | 사진·파일을 클립보드로 붙여 보내기(`--paste`, 사진 여러 장 묶음용) |
 | `kakao-emoticon-ui.js` + `aside_cu.py` | 이모티콘 창 열기·칸 번호 읽기·전송·닫기(접근성)와 탭·칸 누르기(Aside Computer Use) — `--emoticon` |
 | `kakao-open-ui.js` | 본창 채팅 목록에서 닫힌 채팅 창 열기(`kakao-send.py --open`·`--open-only`) |

@@ -385,10 +385,11 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file
 - `메시지 입력`·`전송`은 한국어 UI에서 확인한 이름이다. 다른 언어 UI면 `kakao-send-ui.js`의 두 문자열을 바꾼다.
 - JXA 메모: `app.read(path, {as:'utf8'})`는 null을 준다 → `$.NSString.stringWithContentsOfFileEncodingError`로 읽는다.
 
-### 8-1. 사진·파일은 「파일전송」 단추로 뒤에서 보낸다 — `kakao-attach-ui.js`(묶음은 `--paste`, `kakao-clip-ui.js`)
+### 8-1. 사진·파일은 「파일전송」 단추로 뒤에서 보낸다 — `kakao-attach-ui.js`(묶음도 여기서 함께 고르기, 또는 `--paste`의 `kakao-clip-ui.js`)
 
-- **기본 길(뒤에서)**: 채팅 창의 「파일전송 ⌘O」 AXPress → 열기 시트 → 사이드바 「다운로드」 선택 → 그 이름의 파일을 골라 「열기」(계층 보기는 AX C API로 그 열 목록의 `AXSelectedChildren`을 바꿔 고르고, 목록 보기는 줄 선택) → 확인 시트 「1개 전송」. 마우스·키보드·클립보드를 쓰지 않고 카톡을 앞으로 띄우지 않는다. 시트는 채팅 창에 붙어 뜨고 사용자가 보던 창 아래에 머문다(2026-11-18 나와의 채팅에 사진 1장: 6.2초, DB type 2, 맨 앞 앱·창 그대로).
-- 한 번에 하나씩 보낸다. 여러 개면 앞 것이 DB에 들어온 뒤 다음 것을 보내며, 사진 여러 장은 따로따로 간다(묶음이 아니다).
+- **기본 길(뒤에서)**: 채팅 창의 「파일전송 ⌘O」 AXPress → 열기 시트 → 사이드바 「다운로드」 선택 → 그 이름의 파일을 골라 「열기」(계층 보기는 AX C API로 그 열 목록의 `AXSelectedChildren`을 바꿔 고르고, 목록 보기는 줄 선택) → 확인 시트 「N개 전송」. 마우스·키보드·클립보드를 쓰지 않고 카톡을 앞으로 띄우지 않는다. 시트는 채팅 창에 붙어 뜨고 사용자가 보던 창 아래에 머문다(2026-11-18 나와의 채팅에 사진 1장: 6.2초, DB type 2, 맨 앞 앱·창 그대로).
+- **사진 여러 장 묶음도 이 길로 된다**: `kakao-attach-ui.js <창> send a.png b.png …`처럼 이름을 여러 개 주면 열기 시트에서 한 번에 함께 골라(계층 보기는 그 열 목록 `AXSelectedChildren`에, 목록 보기는 `AXSelectedRows`에 배열을 AX C API로 넣는다) 「N개 전송」을 누른다. 카톡이 「사진 N장」 묶음 하나(type 27)로 보낸다 — 2026-11-24 복제본 카톡의 나와의 채팅에 2장·4장(계층 보기, 닫힌 창을 연 뒤 포함) 모두 type 27, 맨 앞 앱·맨 위 창 그대로, 클립보드 안 씀. 「묶어보내기」 안내 시트가 뜨면 「확인」을 누른다(이번엔 안 떴다). 목록 보기 함께 고르기는 아직 실측하지 않았다(예전엔 System Events로 `AXSelectedRows`를 넣어 무시됐다).
+- `kakao-send.py`는 아직 하나씩 부른다(앞 것이 DB에 들어온 뒤 다음 것) — 그래서 이 명령에서는 사진 여러 장이 따로따로 가고, 묶음은 `--paste`다.
 - **함정 — 계층 보기 항목의 `AXOpen`(더블클릭)은 먹다 말다 한다.** 2026-11-23 mp4 한 파일로 같은 `AXOpen`이 18번 중 4번만 확인 시트를 띄웠다 — 3번 연달아 된 바로 뒤 10번 연달아 아무 일도 안 했다(열기 시트가 그대로 남아 `NO_CONFIRM_SHEET`, 시작 폴더가 「다운로드」든 다른 폴더든, 맨 앞 앱·`restoreFront`와도 상관없었다). System Events로는 항목을 고를 수도 없다(항목에 `AXSelected`가 없고, 목록의 `AXSelectedChildren`에 넣으면 「유형을 변경할 수 없습니다」). 그래서 `kakao-attach-ui.js`는 JXA의 AX C API(`AXUIElementSetAttributeValue`)로 그 열 목록의 `AXSelectedChildren`을 그 항목으로 바꾼 뒤(돌려주는 값은 -25205여도 실제로 골라진다) 「열기」가 켜지면 누른다 — 고친 뒤 dry-run 2번·전송 1번 모두 확인 시트까지 갔다(7~8초).
 - `--attach`로 보낸 mp4는 동영상(type 3)이 아니라 파일(type 18)로 들어간다(2026-11-23 실측, 크기는 원본과 같음).
 - 열기 시트는 마지막에 쓴 폴더·보기 방식으로 열린다. 계층 보기와 목록 보기를 다루고, 아이콘·갤러리 보기면 보기 방식을 바꾸지 않고 `NO_FILE_VIEW`로 멈춘다. 경로 입력(⇧⌘G)은 카톡 PID로 키를 보내도 먹지 않았다 — 그래서 파일은 `~/Downloads` 바로 아래에 있어야 한다(아래 복사 규칙). 이 길을 쓰면 열기 시트가 기억하는 폴더가 「다운로드」로 바뀐다.
@@ -436,7 +437,7 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file
 
 ### 8-5. 다른 카톡 앱(복제본 등) — `--bundle-id`, `--pid`
 
-- 모든 UI 스크립트(`kakao-send-ui.js`·`kakao-clip-ui.js`·`kakao-open-ui.js`·`kakao-reply-ui.js`·`kakao-mention-ui.js`)는 환경변수 `KAKAO_BUNDLE_ID`(기본 `com.kakao.KakaoTalkMac`)·`KAKAO_PID`로 대상 앱을 고른다. `kakao-send.py`의 `--bundle-id`·`--pid`가 이 둘을 넘긴다. (예전 길 `kakao-attach-ui.js`는 기본 카카오톡만.)
+- 모든 UI 스크립트(`kakao-send-ui.js`·`kakao-attach-ui.js`·`kakao-clip-ui.js`·`kakao-open-ui.js`·`kakao-reply-ui.js`·`kakao-mention-ui.js`)는 환경변수 `KAKAO_BUNDLE_ID`(기본 `com.kakao.KakaoTalkMac`)·`KAKAO_PID`로 대상 앱을 고른다. `kakao-send.py`의 `--bundle-id`·`--pid`가 이 둘을 넘긴다.
 - `--pid`를 주면 그 PID 하나만 건드리고, 그 PID의 번들 ID가 `--bundle-id`(없으면 기본값)와 다르면 `WRONG_APP`으로 멈춘다. 같은 맥에서 두 카톡(본 계정·에이전트 계정)을 띄울 때 엉뚱한 계정으로 보내지 않게 하는 장치다. PID 없이 번들 ID로 찾을 때 그 앱이 둘 이상이면 `APP_COUNT`.
 - DB 확인은 그 앱 계정의 DB여야 한다 — `KAKAO_DB_KEY`·`KAKAO_DB_PATH`·`KAKAO_USER_ID`를 그 계정 값으로 준다(§7). 복제한 앱은 컨테이너 경로가 달라 DB 경로도 다르다.
 - 시험 전송은 그 계정의 나와의 채팅에만 한다(남에게 안 나간다). 다른 방은 `--dry-run`과 이미 열린 창까지만.
