@@ -16,7 +16,8 @@
   --file      : 보낼 글이 든 텍스트 파일.
   --photo     : 보낼 사진(여러 번 쓸 수 있다). DB에서 type 2(사진)·27(여러 장)로 확인한다.
   --attach    : 보낼 파일(여러 번 쓸 수 있다). DB에서 type 18(파일)로 확인한다.
-                글·사진·파일은 적은 순서대로 보낸다. 같은 종류가 이어지면 한 번에 붙인다 — 사진 여러 장은 「사진 N장」 묶음(type 27).
+                글·사진·파일은 적은 순서대로 보낸다. 사진이 이어지면 한 번에 붙여 「사진 N장」 묶음(type 27),
+                파일은 하나씩(--paste면 이어진 파일도 한 번에).
   --reply-to  : 그 logId 글에 「답장」(1:1·일반방) 또는 「댓글」(오픈채팅)으로 --file 글을 보낸다(kakao-reply-ui.js).
                 원글은 DB에서 내용·작성자를 읽어 화면 말풍선과 맞춘다 — 글자 글과 사진·동영상·파일.
                 표에 없으면 돋보기(대화 내 검색)로 그 글(또는 그 방에 하나뿐인 옆 글)을 찾아 그 근처를 불러온다.
@@ -35,8 +36,10 @@
   --pid       : 대상 앱 PID. 주면 그 PID 하나만 건드리고, 그 PID의 번들 ID가 --bundle-id와 다르면 멈춘다.
                 (UI 스크립트에는 환경변수 KAKAO_BUNDLE_ID·KAKAO_PID로 넘긴다.)
   --me        : 내 user id. 없으면 KAKAO_USER_ID(환경변수 또는 KAKAO_ENV_FILE). 전송 확인·답장 원글 확인·새 글 검사에 쓴다.
-사진·파일은 1장·1개여도 클립보드로 붙인다(kakao-clip-ui.js): 카톡을 몇 초 앞으로 띄워 「편집 → 붙여넣기」하고,
-끝나면 쓰던 앱과 원래 클립보드를 되돌린다. 붙여넣기는 ~/Downloads 아래 파일만 받으므로 다른 곳의 파일은
+사진·파일은 채팅 창의 「파일전송」 단추로 뒤에서 보낸다(kakao-attach-ui.js): 카톡을 앞으로 띄우지 않고 클립보드를 쓰지 않는다.
+사진 2장 이상이 이어지면 열기 시트에서 한 번에 함께 골라 「사진 N장」 묶음 하나(type 27)로, 그 밖에는 하나씩 보낸다.
+--paste면 클립보드 붙여넣기(kakao-clip-ui.js): 카톡을 몇 초 앞으로 띄워 「편집 → 붙여넣기」하고, 끝나면 쓰던 앱과 원래 클립보드를 되돌린다.
+두 길 모두 ~/Downloads 아래 파일만 받으므로 다른 곳의 파일은
 ~/Downloads에 같은 이름으로 잠깐 복사하고 끝나면 지운다. 같은 이름의 다른 파일이 있으면 덮지 않고 멈춘다(STAGE_CONFLICT).
 열쇠·DB 경로는 kakao_db.py와 같은 규칙(KAKAO_DB_KEY·KAKAO_DB_PATH·KAKAO_ENV_FILE)으로 읽는다.
 글은 보낸 뒤 DB에 남은 글 전체를 파일과 글자 대조해 CONTENT SAME을 찍는다(다르면 FAIL CONTENT_MISMATCH). 파일이 낡은 글이면
@@ -207,7 +210,7 @@ def main() -> int:
                     help='답장을 못 붙이면 입력칸을 비운 뒤 답장 없이 보통 글로 보낸다(없으면 FAIL로 멈춤)')
     ap.add_argument('--mention', action='append', default=[], metavar='이름', help='글 맨 앞에 진짜 멘션(여러 번)')
     ap.add_argument('--paste', action='store_true',
-                    help='사진·파일을 클립보드로 붙여 보낸다(카톡이 몇 초 앞으로 온다, 사진 여러 장은 묶음 하나)')
+                    help='사진·파일을 클립보드로 붙여 보낸다(카톡이 몇 초 앞으로 온다 — 「파일전송」 길이 안 될 때)')
     ap.add_argument('--open', action='store_true', help='창이 닫혀 있으면 본창 목록에서 연다')
     ap.add_argument('--open-only', action='store_true', help='창만 열고 보내지 않는다')
     ap.add_argument('--open-hint', default='', help='같은 이름 방이 여럿일 때 미리보기 글로 고르는 말')
@@ -370,8 +373,10 @@ def send_attachment(a: argparse.Namespace, kind: str, paths: list[str], key: str
     keep = False
     lines: list[str] = []
     try:
+        # 사진 여러 장은 열기 시트에서 함께 골라 「사진 N장」 묶음 하나로 보낸다(파일은 하나씩)
+        bundle = kind == 'photo' and n > 1
         if a.dry_run:
-            res = with_window(a, lambda: attach_ui(a, 'check', staged), lines)
+            res = with_window(a, lambda: attach_ui(a, 'check', staged, bundle=bundle), lines)
             print('\n'.join(lines + [json.dumps(res, ensure_ascii=False)]))
             if not res.get('ok'):
                 print(f"FAIL {res.get('step')}")
@@ -390,7 +395,7 @@ def send_attachment(a: argparse.Namespace, kind: str, paths: list[str], key: str
                 time.sleep(0.5)
             return False
 
-        res = with_window(a, lambda: attach_ui(a, 'send', staged, arrived), lines)
+        res = with_window(a, lambda: attach_ui(a, 'send', staged, arrived, bundle), lines)
         print('\n'.join(lines + [json.dumps(res, ensure_ascii=False)]))
         if not res.get('ok'):
             print(f"FAIL {res.get('step')}")
@@ -418,15 +423,17 @@ def send_attachment(a: argparse.Namespace, kind: str, paths: list[str], key: str
                     os.remove(c)
 
 
-def attach_ui(a: argparse.Namespace, mode: str, staged: list[str], arrived=None) -> dict[str, object]:
+def attach_ui(a: argparse.Namespace, mode: str, staged: list[str], arrived=None, bundle: bool = False) -> dict[str, object]:
     """사진·파일을 채팅 창에 붙인다(mode: check는 확인 시트까지 갔다 취소, send는 전송).
 
-    기본은 「파일전송」 단추 길(kakao-attach-ui.js): 카톡을 앞으로 띄우지 않고 클립보드를 쓰지 않는다. 하나씩 보내며,
-    앞 것이 DB에 들어온 뒤에 다음 것을 보낸다(arrived). --paste면 클립보드 붙여넣기(kakao-clip-ui.js): 카톡이 몇 초 앞으로
-    오지만 사진 여러 장이 「사진 N장」 묶음 하나로 간다.
+    기본은 「파일전송」 단추 길(kakao-attach-ui.js): 카톡을 앞으로 띄우지 않고 클립보드를 쓰지 않는다. bundle(사진 여러 장)이면
+    이름을 한 번에 넘겨 열기 시트에서 함께 골라 「사진 N장」 묶음 하나로, 아니면 하나씩 보내며 앞 것이 DB에 들어온 뒤에
+    다음 것을 보낸다(arrived). --paste면 클립보드 붙여넣기(kakao-clip-ui.js): 카톡이 몇 초 앞으로 온다.
     """
     if a.paste:
         return osa('kakao-clip-ui.js', a.window, mode, *staged)
+    if bundle:
+        return osa('kakao-attach-ui.js', a.window, mode, *[os.path.basename(p) for p in staged], timeout=150)
     res: dict[str, object] = {'ok': False, 'step': 'NO_FILES'}
     for i, path in enumerate(staged):
         res = osa('kakao-attach-ui.js', a.window, mode, os.path.basename(path))

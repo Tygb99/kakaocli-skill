@@ -4,7 +4,7 @@
 //  send  : 확인 시트의 「N개 전송」을 누른다(「묶어보내기」 안내 시트가 뜨면 「확인」)
 // 이름을 여러 개 주면 열기 시트에서 한 번에 함께 고른다 — 사진 여러 장은 「사진 N장」 묶음 하나(type 27)로 간다.
 // 순서: 「파일전송 ⌘O」 AXPress → 열기 시트(채팅 창에 붙는 시트라 사용자가 보던 창을 가리지 않는다) → 사이드바 「다운로드」 선택
-//   → 그 이름의 파일을 골라 「열기」(계층 보기는 AX C API로 그 열의 AXSelectedChildren, 목록 보기는 줄 선택) → 확인 시트 「1개 전송」.
+//   → 그 이름의 파일을 골라 「열기」(계층 보기는 그 열의 AXSelectedChildren, 목록 보기는 AXSelectedRows — 둘 다 AX C API) → 확인 시트 「N개 전송」.
 // 열기 시트는 마지막에 쓴 폴더·보기 방식으로 열린다(2026-11-18: 다운로드가 아닌 폴더·계층 보기로 열려, 목록 보기만 찾던 옛 판이 NO_LIST_VIEW로 멈췄다).
 // 경로 입력(⇧⌘G)은 카톡 PID로 키를 보내도 먹지 않는다 — 그래서 파일은 ~/Downloads 바로 아래에 있어야 한다(kakao-send.py가 복사하고 지운다).
 // 창·버튼 이름(파일전송, 다운로드, 열기, 취소, N개 전송, 확인)은 한국어 UI에서 확인한 값이다.
@@ -135,8 +135,9 @@ function axSelectInColumns(pid, title, sames) {
   $.AXUIElementSetAttributeValue(list, $('AXSelectedChildren'), nsArray(r.picks.map(([, g]) => g)));
   return { selected: axArr(list, 'AXSelectedChildren').length };
 }
-// 목록 보기에서 여러 줄을 함께 고른다(System Events의 AXSelectedRows 설정은 무시됐다 — 2026-10-18). AX C API로 AXSelectedRows를 바꾼다.
-function axSelectRows(pid, title, sames) {
+// 목록 보기 줄 이름은 AX C API로 읽는다 — System Events로 줄마다 읽으면 한 줄에 약 0.5초라 392줄 폴더를 한 번 훑는 데
+// 3분이 넘었다(2026-11-24 실측: System Events 20줄 9.99초, AX C API 392줄 1.3초).
+function axListRows(pid, title) {
   const sheet = axSheet(pid, title);
   const list = sheet && axFindAll(sheet, 'AXOutline', 6, []).find((o) => axStr(o, 'AXDescription') === '목록 보기');
   if (!list) return { err: 'AX_NO_LIST' };
@@ -146,6 +147,12 @@ function axSelectRows(pid, title, sames) {
     const names = cell ? axArr(cell, 'AXChildren').map((e) => String(axStr(e, 'AXValue') || axStr(e, 'AXTitle') || '')) : [];
     for (const nm of names) if (nm) cands.push([list, row, nm]);
   }
+  return { list, cands };
+}
+// 목록 보기에서 줄을 고른다(여러 줄이면 함께). System Events의 AXSelectedRows 설정은 무시됐다(2026-10-18) — AX C API로 AXSelectedRows를 바꾼다.
+function axSelectRows(pid, title, sames) {
+  const { list, cands, err } = axListRows(pid, title);
+  if (err) return { err };
   const r = pickEach(cands, sames);
   if (r.err) return r;
   $.AXUIElementSetAttributeValue(list, $('AXSelectedRows'), nsArray(r.picks.map(([, row]) => row)));
@@ -213,7 +220,6 @@ function run(argv) {
     // 확장자를 숨기는 설정이면 이름이 확장자 없이 보인다 — 둘 다 맞춰 본다
     const sameAs = (name) => { const bare = name.replace(/\.[^.]+$/, ''); return (v) => nfc(v) === nfc(name) || nfc(v) === nfc(bare); };
     const sames = names.map(sameAs);
-    const same = sames[0];
     const browser = findRole(sg, 'AXBrowser', null, 3);
     const list = browser ? null : findRole(sg, 'AXOutline', '목록 보기', 4);
     if (browser) {
@@ -239,18 +245,18 @@ function run(argv) {
       openBtn.actions.byName('AXPress').perform();
     } else if (list) {
       out.view = 'list';
-      if (!waitFor(() => sames.every((s) => list.rows().some((r) => rowName(r).split('|').some(s))), 12)) { cancelPanel(); return done({ step: 'FILE_NOT_IN_LIST' }); }
-      if (names.length === 1) {
-        const row = list.rows().find((r) => rowName(r).split('|').some(same));
-        // 줄 선택이 한 번에 안 먹을 때가 있다(2026-10-24 실측) — 3번까지 다시 고른다
-        if (!waitFor(() => { row.selected = true; delay(0.3); return row.selected(); }, 3, 0.2)) { cancelPanel(); return done({ step: 'NOT_SELECTED' }); }
-      } else {
-        const pick = waitFor(() => { const r = axSelectRows(p.unixId(), title, sames); delay(0.3); return r.err || r.selected === names.length ? r : null; }, 3, 0.2);
-        out.selected = pick ? pick.selected : 0;
-        if (!pick) { cancelPanel(); return done({ step: 'NOT_ALL_SELECTED' }); }
-        if (pick.err) { cancelPanel(); return done(Object.assign({ step: pick.err }, pick)); }
-      }
-      sg.buttons.byName('열기').actions.byName('AXPress').perform();
+      const pid = p.unixId();
+      // 목록이 다 그려질 때까지 이름이 모두 보이기를 기다린다(AX C API — 위 axListRows)
+      const shown = waitFor(() => { const c = axListRows(pid, title); return c.cands && sames.every((s) => c.cands.some(([, , nm]) => s(nm))) ? true : null; }, 12);
+      if (!shown) { cancelPanel(); return done({ step: 'FILE_NOT_IN_LIST' }); }
+      // 줄 선택이 한 번에 안 먹을 때가 있다(2026-10-24 실측) — 3번까지 다시 고른다
+      const pick = waitFor(() => { const r = axSelectRows(pid, title, sames); delay(0.3); return r.err || r.selected === names.length ? r : null; }, 3, 0.2);
+      out.selected = pick ? pick.selected : 0;
+      if (!pick) { cancelPanel(); return done({ step: 'NOT_ALL_SELECTED' }); }
+      if (pick.err) { cancelPanel(); return done(Object.assign({ step: pick.err }, pick)); }
+      const openBtn = sg.buttons.byName('열기');
+      if (!waitFor(() => { try { return openBtn.enabled(); } catch (e) { return false; } }, 12)) { cancelPanel(); return done({ step: 'NOT_SELECTED' }); }
+      openBtn.actions.byName('AXPress').perform();
     } else {
       // 아이콘 보기·갤러리 보기는 아직 다루지 않는다 — 보기 방식을 바꾸지 않고 멈춘다
       cancelPanel();

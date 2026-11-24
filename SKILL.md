@@ -329,11 +329,12 @@ export KAKAO_ENV_FILE=~/.config/<이름>/secrets.env
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt              # 미리보기만(기본, 카톡 안 건드림)
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt --dry-run    # 넣었다 지우기만
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file msg.txt --me <USER_ID> --send
-# 사진·파일: --photo / --attach (여러 번 쓸 수 있다, --file과 섞어도 된다 — 적은 순서대로 하나씩 보낸다)
+# 사진·파일: --photo / --attach (여러 번 쓸 수 있다, --file과 섞어도 된다 — 적은 순서대로 보낸다, 이어진 사진 2장 이상은 「사진 N장」 묶음 하나)
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --photo a.jpg --attach report.pdf --dry-run
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --photo a.jpg --attach report.pdf --me <USER_ID> --send
-# 사진 여러 장을 「사진 N장」 묶음 하나로: --paste (클립보드 붙여넣기 — 카톡이 몇 초 앞으로 온다)
-python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --photo 1.jpg --photo 2.jpg --paste --me <USER_ID> --send
+# 사진 여러 장을 「사진 N장」 묶음 하나로: --photo를 여러 번(열기 시트에서 함께 고른다 — 카톡이 앞으로 안 온다)
+python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --photo 1.jpg --photo 2.jpg --me <USER_ID> --send
+# 「파일전송」 길이 안 될 때만 --paste (클립보드 붙여넣기 — 카톡이 몇 초 앞으로 온다)
 # 카카오 이모티콘(§8-6): DB attachment의 path 그대로
 python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --emoticon 2222021.emot_003.png --me <USER_ID> --send
 # 닫힌 창 열기(§8-2): 열기만, 또는 보내기 전에 닫혀 있으면 열기
@@ -387,17 +388,20 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file
 
 ### 8-1. 사진·파일은 「파일전송」 단추로 뒤에서 보낸다 — `kakao-attach-ui.js`(묶음도 여기서 함께 고르기, 또는 `--paste`의 `kakao-clip-ui.js`)
 
-- **기본 길(뒤에서)**: 채팅 창의 「파일전송 ⌘O」 AXPress → 열기 시트 → 사이드바 「다운로드」 선택 → 그 이름의 파일을 골라 「열기」(계층 보기는 AX C API로 그 열 목록의 `AXSelectedChildren`을 바꿔 고르고, 목록 보기는 줄 선택) → 확인 시트 「N개 전송」. 마우스·키보드·클립보드를 쓰지 않고 카톡을 앞으로 띄우지 않는다. 시트는 채팅 창에 붙어 뜨고 사용자가 보던 창 아래에 머문다(2026-11-18 나와의 채팅에 사진 1장: 6.2초, DB type 2, 맨 앞 앱·창 그대로).
-- **사진 여러 장 묶음도 이 길로 된다**: `kakao-attach-ui.js <창> send a.png b.png …`처럼 이름을 여러 개 주면 열기 시트에서 한 번에 함께 골라(계층 보기는 그 열 목록 `AXSelectedChildren`에, 목록 보기는 `AXSelectedRows`에 배열을 AX C API로 넣는다) 「N개 전송」을 누른다. 카톡이 「사진 N장」 묶음 하나(type 27)로 보낸다 — 2026-11-24 복제본 카톡의 나와의 채팅에 2장·4장(계층 보기, 닫힌 창을 연 뒤 포함) 모두 type 27, 맨 앞 앱·맨 위 창 그대로, 클립보드 안 씀. 「묶어보내기」 안내 시트가 뜨면 「확인」을 누른다(이번엔 안 떴다). 목록 보기 함께 고르기는 아직 실측하지 않았다(예전엔 System Events로 `AXSelectedRows`를 넣어 무시됐다).
-- `kakao-send.py`는 아직 하나씩 부른다(앞 것이 DB에 들어온 뒤 다음 것) — 그래서 이 명령에서는 사진 여러 장이 따로따로 가고, 묶음은 `--paste`다.
+- **기본 길(뒤에서)**: 채팅 창의 「파일전송 ⌘O」 AXPress → 열기 시트 → 사이드바 「다운로드」 선택 → 그 이름의 파일을 골라 「열기」(계층 보기는 그 열 목록의 `AXSelectedChildren`, 목록 보기는 목록의 `AXSelectedRows`를 AX C API로 바꿔 고른다) → 확인 시트 「N개 전송」. 마우스·키보드·클립보드를 쓰지 않고 카톡을 앞으로 띄우지 않는다. 시트는 채팅 창에 붙어 뜨고 사용자가 보던 창 아래에 머문다(2026-11-18 나와의 채팅에 사진 1장: 6.2초, DB type 2, 맨 앞 앱·창 그대로).
+- **사진 여러 장 묶음도 이 길로 된다**: `kakao-attach-ui.js <창> send a.png b.png …`처럼 이름을 여러 개 주면 열기 시트에서 한 번에 함께 골라(계층 보기는 그 열 목록 `AXSelectedChildren`에, 목록 보기는 `AXSelectedRows`에 배열을 AX C API로 넣는다) 「N개 전송」을 누른다. 카톡이 「사진 N장」 묶음 하나(type 27)로 보낸다 — 2026-11-24 복제본 카톡의 나와의 채팅에 2장·4장(계층 보기, 닫힌 창을 연 뒤 포함) 모두 type 27, 맨 앞 앱·맨 위 창 그대로, 클립보드 안 씀. 「묶어보내기」 안내 시트가 뜨면 「확인」을 누른다(아직 한 번도 안 떴다). 목록 보기도 된다: 2026-11-24 복제본 카톡 나와의 채팅에 2장 두 번 type 27, 1장 type 2, 맨 앞 앱·맨 위 창 그대로(예전엔 System Events로 `AXSelectedRows`를 넣어 무시됐다 — 2026-10-18).
+- **함정 — 목록 보기 줄을 System Events로 읽으면 줄마다 약 0.5초다.** 다운로드에 392개가 있을 때 20줄에 9.99초라 한 번 훑는 데 3분이 넘어 120초 제한에 끊겼다(2026-11-24). 그래서 목록 보기 줄 이름은 AX C API로 읽는다(392줄 1.3초).
+- `kakao-send.py`도 이어진 `--photo` 2장 이상을 이 길로 한 번에 넘겨 묶음 하나로 보낸다(2026-11-24 카톡 앱 나와의 채팅 2장: 계층 보기·목록 보기 각 한 번 type 27). 파일(`--attach`)은 하나씩 보낸다(앞 것이 DB에 들어온 뒤 다음 것).
 - **함정 — 계층 보기 항목의 `AXOpen`(더블클릭)은 먹다 말다 한다.** 2026-11-23 mp4 한 파일로 같은 `AXOpen`이 18번 중 4번만 확인 시트를 띄웠다 — 3번 연달아 된 바로 뒤 10번 연달아 아무 일도 안 했다(열기 시트가 그대로 남아 `NO_CONFIRM_SHEET`, 시작 폴더가 「다운로드」든 다른 폴더든, 맨 앞 앱·`restoreFront`와도 상관없었다). System Events로는 항목을 고를 수도 없다(항목에 `AXSelected`가 없고, 목록의 `AXSelectedChildren`에 넣으면 「유형을 변경할 수 없습니다」). 그래서 `kakao-attach-ui.js`는 JXA의 AX C API(`AXUIElementSetAttributeValue`)로 그 열 목록의 `AXSelectedChildren`을 그 항목으로 바꾼 뒤(돌려주는 값은 -25205여도 실제로 골라진다) 「열기」가 켜지면 누른다 — 고친 뒤 dry-run 2번·전송 1번 모두 확인 시트까지 갔다(7~8초).
 - `--attach`로 보낸 mp4는 동영상(type 3)이 아니라 파일(type 18)로 들어간다(2026-11-23 실측, 크기는 원본과 같음).
 - 열기 시트는 마지막에 쓴 폴더·보기 방식으로 열린다. 계층 보기와 목록 보기를 다루고, 아이콘·갤러리 보기면 보기 방식을 바꾸지 않고 `NO_FILE_VIEW`로 멈춘다. 경로 입력(⇧⌘G)은 카톡 PID로 키를 보내도 먹지 않았다 — 그래서 파일은 `~/Downloads` 바로 아래에 있어야 한다(아래 복사 규칙). 이 길을 쓰면 열기 시트가 기억하는 폴더가 「다운로드」로 바뀐다.
-- **`--paste` 길(클립보드 붙여넣기, `kakao-clip-ui.js`)**: 사진 여러 장을 「사진 N장」 묶음 하나(type 27)로 보낼 때만 쓴다. 카톡이 몇 초 앞으로 온다.
+- **열기 시트 보기 방식은 앱별이 아니라 맥 전체 설정이다**(`defaults -g`의 `NSNavPanelFileListModeForOpenMode2`·`NSNavPanelFileLastListModeForOpenModeKey`). 한 앱에서 바꾸면 다른 앱 열기 창도 그 보기로 열린다 — 2026-11-24 복제본 카톡에서 목록 보기로 바꾼 동안 카톡 앱 열기 시트도 목록 보기로 열렸다. 스크립트는 보기를 바꾸지 않는다. 시험으로 바꿔야 하면 시트의 `AXMenuButton`(도움말 「아이콘, 목록 또는 계층으로 보고…」, 설명이 지금 보기 이름) AXPress → 그 아래 `AXMenu`의 「아이콘」·「목록」·「열」(계층 보기) AXPress, 끝나면 원래 보기로 되돌린다.
+- 「파일전송」을 직접 누르는 새 스크립트는 시트가 뜬 뒤 `restoreFront`(`kakao-attach-ui.js`)를 꼭 부른다. 안 부르면 열기 시트·채팅 창이 사용자가 보던 창 위로 올라와 머문다(2026-11-24 보기 바꾸기 탐색 스크립트: 열기 시트 40초·채팅 창 11초가 사용자의 Discord 창보다 위, 앱은 앞으로 안 옴).
+- **`--paste` 길(클립보드 붙여넣기, `kakao-clip-ui.js`)**: 「파일전송」 길이 안 될 때(예: 열기 시트가 아이콘·갤러리 보기라 `NO_FILE_VIEW`) 쓴다. 사진 여러 장은 여기서도 묶음 하나(type 27)다. 카톡이 몇 초 앞으로 온다.
 - `--paste` 순서: 클립보드를 통째로 저장 → NSPasteboard에 파일 URL·`NSFilenamesPboardType` → 카톡을 잠깐 앞으로, 그 창 AXRaise, 입력칸(`메시지 입력`) 초점 → 메뉴 「편집 → 붙여넣기」 AXPress → 확인 시트 「N개 전송」 → (사진 여러 장이면 「묶어보내기」 안내 시트 「확인」) → 쓰던 앱을 다시 앞으로 → 클립보드 되돌림. 성공은 DB의 새 행 type으로만 판정한다(사진 2, 파일 18, 여러 장 묶음 27).
 - **카톡이 맨 앞 앱일 때만** 붙여넣기가 먹는다(뒤에 있으면 아무 일도 안 한다 — 창 AXRaise·AXMain·AXFocused로도, ⌘V를 카톡 PID에만 보내도 안 됨, 2026-11-18 다시 확인). 그래서 몇 초 앞으로 띄우고, 끝나면 원래 맨 앞 앱(PID로 비교)과 원래 클립보드(모든 항목·종류)를 되돌린다. 출력 JSON의 `clipRestored`·`clipTextSame`으로 확인한다.
 - 두 길 모두 `~/Downloads` 아래 파일만 쓴다(붙여넣기는 외장 디스크 경로를 「존재하지 않는 항목」으로 본다). 그래서 `kakao-send.py`가 다른 곳의 파일을 **같은 이름으로 `~/Downloads`에 잠깐 복사**하고 끝나면 지운다. 이름을 바꾸지 않는 것은 받는 사람에게 파일 이름이 그대로 보이기 때문이다. `NOT_IN_DB`면 복사본을 남겨 두고 경로를 알려 준다.
-- `--paste`에서는 같은 종류(`--photo`끼리, `--attach`끼리)가 이어지면 한 번에 붙인다.
+- `--paste`에서는 같은 종류(`--photo`끼리, `--attach`끼리)가 이어지면 한 번에 붙인다. 기본 길은 이어진 `--photo`만 한 번에 고르고 `--attach`는 하나씩 보낸다.
 - `파일전송`·`다운로드`·`열기`·`편집`·`붙여넣기`(또는 `Paste`)·`메시지 입력`·`취소`·`N개 전송`·`확인`은 한국어 UI에서 확인한 이름이다.
 
 ### 8-2. 닫힌 창 열기 — `kakao-open-ui.js` (`--open`, `--open-only`)
