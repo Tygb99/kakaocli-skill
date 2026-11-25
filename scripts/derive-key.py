@@ -2,14 +2,14 @@
 
 kakaocli 의 chats/search/messages 는 --user-id 를 받지 않아 자동탐지를 다시 돌리고
 또 실패한다. auth --verbose 가 찍어주는 Secure key 는 잘려 있어 쓸 수 없다.
-그래서 키를 여기서 계산해 --key 로 넘긴다.
+그래서 키를 여기서 계산한다. 평소 조회는 kakao_db.py(키를 명령줄에 싣지 않음)로 하고,
+kakaocli --key 는 처음 키를 확인할 때만 쓴다(SKILL.md §4 — 인자는 ps·pgrep -f 에 보인다).
 
 원 구현: Sources/KakaoCore/Database/KeyDerivation.swift
 (https://gist.github.com/blluv/8418e3ef4f4aa86004657ea524f2de14 기반)
 
 사용법:
-    KEY=$(python3 derive-key.py "<DEVICE_UUID>" <USER_ID>)
-    kakaocli search "검색어" --key "$KEY"
+    KEY=$(python3 derive-key.py "<DEVICE_UUID>" <USER_ID>)   # → env 파일 KAKAO_DB_KEY (SKILL.md §7-1)
 
 DEVICE_UUID 는 `kakaocli status` 의 Device UUID.
 출력은 키 한 줄뿐이다 — 로그나 화면에 남기지 말 것.

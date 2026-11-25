@@ -97,6 +97,8 @@ kakaocli messages --chat-id <ID> --key "$KEY" --limit 3000 --json
 
 **키와 토큰은 절대 출력하지 않는다.** 변수로만 넘긴다.
 
+**위 `--key` 명령은 열쇠가 맞는지 처음 확인할 때만 쓴다. 평소 조회·감시는 §7의 `kakao_db.py`로 한다.** kakaocli는 열쇠를 `--key` 인자로만 받는다(환경변수·파일·stdin으로 받는 길이 없다 — `QueryCommand.swift`의 `@Option key`). 인자는 프로세스 명령줄이라 kakaocli가 도는 동안 `ps`·`pgrep -f`·`pgrep -fl`·활동 모니터에 열쇠 전문이 보이고, 그 출력을 본 에이전트의 세션 기록에 남는다(2026-11-25 몇 초마다 조회하는 감시의 `kakaocli query … --key`가 다른 에이전트의 `pgrep -fl KakaoTalk` 출력에 찍혔다). 프로세스를 찾을 땐 `pgrep -l`·`ps -o pid,comm`처럼 명령줄을 안 보는 꼴을 쓴다.
+
 키는 난수가 아니라 **UUID + user ID에서 결정적으로 유도된다 — 매번 같은 값이고, 무효화 수단은 사실상 카카오톡 재설치(UUID 변경)뿐이다.** "일회용이니 찍혀도 된다"는 성립하지 않는다.
 
 **`--key`를 안 받는 명령에 넘기지 마라 — usage 에러가 `error: unrecognized arguments: --key <키 전문>`처럼 키 전문을 그대로 출력한다.** 스크립트마다 인자가 다르다: `derive-key.py`는 위치 인자, `extract-photos.py`는 `--user-id`, kakaocli 하위명령은 `--key`. 확신 없으면 `-h`부터.
@@ -132,7 +134,7 @@ WHERE m.chatId = <CHAT_ID>
 ORDER BY m.sentAt
 ```
 
-`kakaocli query "<SQL>" --key "$KEY"` 로 돌린다. 결과는 값만 담긴 **2차원 배열 JSON**이라 컬럼명이 없다 — 순서로 받는다.
+`python3 scripts/kakao_db.py "<SQL>"`(§7, 열쇠를 명령줄에 싣지 않는다)로 돌린다. 결과는 값만 담긴 **2차원 배열 JSON**이라 컬럼명이 없다 — 순서로 받는다.
 
 - `sentAt`은 unix epoch. `'+9 hours'`로 SQL 안에서 KST 변환이 끝난다(§ 시각 항목의 UTC 함정을 피할 수 있다).
 - 오픈채팅 참여자는 방마다 닉네임이 다를 수 있다. `nickName`이 그 방 표시명이고, `displayName`/`friendNickName`은 내 주소록 기준이다. 위 `COALESCE` 순서가 실제 대화 표시에 가장 가깝다.
@@ -307,16 +309,15 @@ python3 scripts/kakao_db.py "SELECT count(*) FROM NTChatMessage"   # 결과 JSON
 
 파이썬에서: `sys.path.insert(0, "<스킬>/scripts"); from kakao_db import derive_key, q` → `q(derive_key(), sql)`.
 
-kakaocli를 직접 부를 때도 `--db`를 준다(`query`·`chats`·`search`·`messages` 모두 받는다):
+다른 DB(복제한 카톡 앱 등, §8-5)는 `query_db(<DB 경로>, <열쇠>, sql)`로 연다.
 
-```bash
-set -a; . "$KAKAO_ENV_FILE"; set +a
-kakaocli query "<SQL>" --db "$KAKAO_DB_PATH" --key "$KAKAO_DB_KEY"
-```
+`kakao_db`는 kakaocli를 부르지 않는다. kakaocli `DatabaseReader.open`과 같은 순서(읽기 전용으로 열기 → `PRAGMA cipher_default_compatibility = 3`, 안 되면 4 → `PRAGMA KEY` → `sqlite_master` 확인)를 libsqlcipher(`brew install sqlcipher`, kakaocli가 링크하는 그 라이브러리 — 다른 곳이면 `KAKAO_SQLCIPHER_LIB`)로 이 프로세스 안에서 해서 열쇠가 명령줄에 실리지 않는다(§4). 결과도 `kakaocli query`와 같다 — 값만 담긴 2차원 배열, NULL·BLOB은 `""`(2026-11-25 두 DB에서 질의 6개씩 대조해 모두 같았다). 프로세스를 띄우지 않아 질의 하나가 0.01초 안팎이다.
+
+**셸에서 `kakaocli query·search·messages·chats`를 `--key`와 함께 부르지 않는다.** 검색·방 목록·메시지도 §5의 SQL을 `kakao_db.py`로 돌린다.
 
 - env 파일에는 열쇠 전문이 있다. 저장소·로그·화면에 내지 않는다(§4와 같다).
-- 카카오톡 재설치·기기 변경·계정 변경으로 열쇠가 바뀌면 질의가 실패한다 → 7-1을 다시 한다.
-- `--db` 질의가 실패하면 `kakao_db.q`는 `--db` 없이 한 번 더 돈다(느리지만 동작한다).
+- 카카오톡 재설치·기기 변경·계정 변경으로 열쇠가 바뀌면 질의가 `PRAGMA key 실패`로 끝난다 → 7-1을 다시 한다.
+- `KAKAO_DB_PATH`가 없거나 그 파일이 없으면 `kakaocli status`의 `Database name:`으로 찾는다(느리다).
 
 ---
 
@@ -464,7 +465,7 @@ python3 scripts/kakao-send.py --window "<창 제목>" --chat-id <CHAT_ID> --file
 
 - [ ] 전체 디스크 접근 권한을 줬는가
 - [ ] 빈 계정 해시(`31bca020...`)를 골라내고 활성 해시를 썼는가
-- [ ] `--key`로 넘겼는가 (`chats`/`search`/`messages`는 `--user-id`를 안 받는다)
+- [ ] 조회를 `kakao_db.py`(§7)로 했는가 — kakaocli에 `--key`를 넘기면 열쇠가 프로세스 명령줄(`ps`·`pgrep -f`)에 보인다(§4)
 - [ ] 키를 화면에 찍지 않았는가 — `--key`를 안 받는 스크립트(`extract-photos.py`)에 넘겨 usage 에러로 새지 않았는가. 샜다면 세션 .jsonl 치환까지 했는가(§4)
 - [ ] 타임스탬프를 KST로 변환했는가 (`--json`은 UTC, `query`는 `'+9 hours'`)
 - [ ] `text`가 `null`인 행을 방어했는가
