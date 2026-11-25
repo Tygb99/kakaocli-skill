@@ -48,6 +48,14 @@ function kakaoProcess(se) {
   return { p: ps[0] };
 }
 
+// 본창 목록 줄 이름이 창 제목인지. 카톡 26.10.0부터 줄 첫 글자칸에 방 종류가 붙는다(「오픈채팅, <방 이름>」·「나와의 채팅, <내 이름>」,
+// 2026-11-25 복제본 카톡 26.8.0 → 26.10.0 뒤 실측). 26.8.0까지는 방 이름만 있었다. 확인한 종류 말만 떼고 비교한다.
+const ROW_KIND = ['오픈채팅', '나와의 채팅'];
+function sameRowName(t, title) {
+  const a = String(t).normalize('NFC'), b = String(title).normalize('NFC');
+  return a === b || ROW_KIND.some((k) => a === k + ', ' + b);
+}
+
 function frontName(se) {
   try { return se.processes.whose({ frontmost: true })()[0].name(); } catch (e) { return null; }
 }
@@ -64,7 +72,7 @@ function rowReturnOpen(se, p, main, list, row, title) {
   const nfc = (s) => String(s).normalize('NFC');
   // 선택된 줄 전체(줄을 다 훑어 고르라 수백 줄에 0.4초쯤) — 키를 보내기 직전에 한 번만 본다. 표의 AXSelectedRows는 JXA로 안 읽힌다.
   const picked = () => { try { return list.rows.whose({ selected: true })().map((r) => { try { return nfc(r.uiElements[0].staticTexts[0].value()); } catch (e) { return ''; } }); } catch (e) { return []; } };
-  const only = () => { const s = picked(); return s.length === 1 && s[0] === nfc(title); };
+  const only = () => { const s = picked(); return s.length === 1 && sameRowName(s[0], title); };
   try { row.selected = true; } catch (e) { return { step: 'NO_SELECT' }; }
   if (!waitFor(() => { try { return row.selected() === true; } catch (e) { return false; } }, 10, 0.1)) return { step: 'SELECT_NOT_CONFIRMED' };
   const isMain = () => { try { return main.attributes.byName('AXMain').value() === true; } catch (e) { return false; } };
@@ -237,7 +245,7 @@ function run(argv) {
         let t = null;
         try { t = list.rows[i].uiElements[0].staticTexts.value(); } catch (e) { t = null; }
         read++;
-        return !!t && !!t.length && nfc(t[0]) === nfc(title) && (!hint || hinted(i, t));
+        return !!t && !!t.length && sameRowName(t[0], title) && (!hint || hinted(i, t));
       };
       let hit = -1;
       for (let d = 0; d <= NEAR && hit < 0; d++) {
@@ -260,7 +268,7 @@ function run(argv) {
         try { texts = list.rows.uiElements[0].staticTexts.value(); } catch (e) { texts = []; }
         if (texts.length) {
           const hits = [];
-          texts.forEach((t, j) => { if (t && t.length && nfc(t[0]) === nfc(title)) hits.push(j); });
+          texts.forEach((t, j) => { if (t && t.length && sameRowName(t[0], title)) hits.push(j); });
           if (hits.length) return hits;
           if (++seen >= 2) return null;
         }
@@ -361,7 +369,7 @@ function run(argv) {
 
     phase = 'menu';
     // 누르기 직전에 그 자리 줄이 여전히 그 방인지 본다(새 글이 오면 목록 순서가 바뀐다).
-    try { if (nfc(row.uiElements[0].staticTexts[0].value()) !== nfc(title)) return done({ step: 'ROW_MOVED' }); } catch (e) { return done({ step: 'ROW_MOVED' }); }
+    try { if (!sameRowName(row.uiElements[0].staticTexts[0].value(), title)) return done({ step: 'ROW_MOVED' }); } catch (e) { return done({ step: 'ROW_MOVED' }); }
     const r = rowMenuOpen(row.uiElements[0]);
     if (r.step !== 'PRESSED') return done(r);
     if (mode === 'openlist') return done({ ok: true, step: 'PRESSED_LIST' });
